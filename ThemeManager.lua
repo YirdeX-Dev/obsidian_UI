@@ -49,7 +49,7 @@ do
     ThemeManager.BuiltInThemes = {
         ["Default"] = {
             1,
-            { FontColor = "ffffff", MainColor = "191919", AccentColor = "7d55ff", BackgroundColor = "0f0f0f", OutlineColor = "282828" },
+            { FontColor = "ffffff", MainColor = "191919", AccentColor = "7d55ff", BackgroundColor = "0f0f0f", OutlineColor = "00FFFF" },
         },
         ["BBot"] = {
             2,
@@ -115,6 +115,55 @@ do
             17,
             { FontColor = "d8dee9", MainColor = "1b2b34", AccentColor = "6699cc", BackgroundColor = "16232a", OutlineColor = "343d46" },
         },
+["深空灰"] = {
+    1,
+    { FontColor = "e0e0e0", MainColor = "1a1a1a", AccentColor = "6b6b6b", BackgroundColor = "0d0d0d", OutlineColor = "2a2a2a" },
+},
+
+["夜幕蓝"] = {
+    1,
+    { FontColor = "c8d6e5", MainColor = "151b2e", AccentColor = "3b5998", BackgroundColor = "0a0f1a", OutlineColor = "1e2a40" },
+},
+
+["翡翠绿"] = {
+    1,
+    { FontColor = "d4edda", MainColor = "0f1a12", AccentColor = "2d8a4e", BackgroundColor = "0a0f0c", OutlineColor = "1a3320" },
+},
+
+["暗金"] = {
+    1,
+    { FontColor = "f5e6ca", MainColor = "1a1810", AccentColor = "c9a84c", BackgroundColor = "0f0e0a", OutlineColor = "332d1a" },
+},
+
+["薰衣草"] = {
+    1,
+    { FontColor = "e8d5f5", MainColor = "1a1520", AccentColor = "8b5cf6", BackgroundColor = "0f0c14", OutlineColor = "281a33" },
+},
+
+["珊瑚红"] = {
+    1,
+    { FontColor = "fce4e4", MainColor = "1a1010", AccentColor = "e5534b", BackgroundColor = "0f0a0a", OutlineColor = "331a1a" },
+},
+
+["冰霜白"] = {
+    1,
+    { FontColor = "1a1a1a", MainColor = "e8e8e8", AccentColor = "5b9bd5", BackgroundColor = "f5f5f5", OutlineColor = "cccccc" },
+},
+
+["石墨黑"] = {
+    1,
+    { FontColor = "b0b0b0", MainColor = "121212", AccentColor = "404040", BackgroundColor = "080808", OutlineColor = "1f1f1f" },
+},
+
+["深海"] = {
+    1,
+    { FontColor = "b3d9ff", MainColor = "0d1a26", AccentColor = "1e6b9e", BackgroundColor = "080f14", OutlineColor = "162b3d" },
+},
+
+["樱桃"] = {
+    1,
+    { FontColor = "fce4ec", MainColor = "1a1014", AccentColor = "d6336c", BackgroundColor = "0f0a0d", OutlineColor = "331a24" },
+},
         ["Material"] = {
             18,
             { FontColor = "eeffff", MainColor = "212121", AccentColor = "82aaff", BackgroundColor = "151515", OutlineColor = "424242" },
