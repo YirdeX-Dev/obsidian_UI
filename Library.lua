@@ -222,17 +222,17 @@ local Library = {
 
     IsLightTheme = false,
     Scheme = {
-        BackgroundColor = Color3.fromRGB(15, 15, 15),
-        MainColor = Color3.fromRGB(25, 25, 25),
-        AccentColor = Color3.fromRGB(125, 85, 255),
-        OutlineColor = Color3.fromRGB(40, 40, 40),
-        FontColor = Color3.new(1, 1, 1),
-        Font = Font.fromEnum(Enum.Font.Code),
+        BackgroundColor = Color3.fromRGB(11, 16, 20),
+    MainColor = Color3.fromRGB(20, 29, 34),
+    AccentColor = Color3.fromRGB(38, 217, 240),
+    OutlineColor = Color3.fromRGB(32, 48, 56),
+    FontColor = Color3.new(1, 1, 1),
+    Font = Font.fromEnum(Enum.Font.Code),
 
-        RedColor = Color3.fromRGB(255, 50, 50),
-        DestructiveColor = Color3.fromRGB(220, 38, 38),
-        DarkColor = Color3.new(0, 0, 0),
-        WhiteColor = Color3.new(1, 1, 1),
+    RedColor = Color3.fromRGB(255, 69, 69),
+    DestructiveColor = Color3.fromRGB(220, 38, 38),
+    DarkColor = Color3.new(0, 0, 0),
+    WhiteColor = Color3.new(1, 1, 1),
 
         BackgroundImage = ""
     },
