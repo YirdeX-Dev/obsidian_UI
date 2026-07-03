@@ -218,7 +218,7 @@ local Library = {
     OriginalMinSize = Vector2.new(480, 360),
     MinSize = Vector2.new(480, 360),
     DPIScale = 1,
-    CornerRadius = 4,
+    CornerRadius = 30,
 
     IsLightTheme = false,
     Scheme = {
@@ -326,7 +326,7 @@ local Templates = {
         SearchbarSize = UDim2.fromScale(1, 1),
         GlobalSearch = false,
 
-        CornerRadius = 4,
+        CornerRadius = 30,
         NotifySide = "Right",
         ShowCustomCursor = true,
 
