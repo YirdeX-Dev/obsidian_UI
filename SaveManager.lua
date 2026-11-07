@@ -6,56 +6,48 @@ local clonefunction = (clonefunction or copyfunction or function(func)
 end)
 
 local HttpService: HttpService = cloneref(game:GetService("HttpService"))
+
+--// Fix is_____ functions for shitsploits, those functions should never error, only return a boolean. (why is this still a problem in the big 2026)
 local isfolder, isfile, listfiles = isfolder, isfile, listfiles
+local isfolder_copy, isfile_copy, listfiles_copy = clonefunction(isfolder), clonefunction(isfile), clonefunction(listfiles)
+local isfolder_success, isfolder_error = pcall(function() return isfolder_copy("test" .. tostring(math.random(1000000, 9999999))) end)
 
-if typeof(clonefunction) == "function" then
-    -- 修复部分执行器的 is_____ 函数：这些函数不应报错，只应返回布尔值。
+if isfolder_success == false or typeof(isfolder_error) ~= "boolean" then
+    isfolder = function(folder)
+        local success, data = pcall(isfolder_copy, folder)
+        return (if success then data else false)
+    end
 
-    local
-        isfolder_copy,
-        isfile_copy,
-        listfiles_copy = clonefunction(isfolder), clonefunction(isfile), clonefunction(listfiles)
+    isfile = function(file)
+        local success, data = pcall(isfile_copy, file)
+        return (if success then data else false)
+    end
 
-    local isfolder_success, isfolder_error = pcall(function()
-        return isfolder_copy("test" .. tostring(math.random(1000000, 9999999)))
-    end)
-
-    if isfolder_success == false or typeof(isfolder_error) ~= "boolean" then
-        isfolder = function(folder)
-            local success, data = pcall(isfolder_copy, folder)
-            return (if success then data else false)
-        end
-
-        isfile = function(file)
-            local success, data = pcall(isfile_copy, file)
-            return (if success then data else false)
-        end
-
-        listfiles = function(folder)
-            local success, data = pcall(listfiles_copy, folder)
-            return (if success then data else {})
-        end
+    listfiles = function(folder)
+        local success, data = pcall(listfiles_copy, folder)
+        return (if success then data else {})
     end
 end
 
+--// Save Manager
 local SaveManager = {
     Library = nil,
 
-    Folder = "ObsidianLibSettings",   -- 文件夹名
-    SubFolder = "",                    -- 子文件夹名
+    Folder = "ObsidianLibSettings",
+    SubFolder = "",
 
-    Ignore = {},                       -- 忽略的索引
-    LoadingOrder = {},                 -- 加载顺序
-    UseLoadingOrder = false,           -- 是否使用加载顺序
+    Ignore = {},
+    LoadingOrder = {},
+    UseLoadingOrder = false,
 
-    AutoloadConfig = nil               -- 自动加载的配置名
+    AutoloadConfig = nil
 }
 
 function SaveManager:SetLibrary(Library)
     SaveManager.Library = Library
 end
 
---// 元素解析器 \\--
+--// Element Parser \\--
 local SpecialValueParser = {
     UDim2 = {
         Encode = function(Value: UDim2)
@@ -82,7 +74,7 @@ local ElementParser = {}; do
     local function CreateParser(
         ElementType: string, 
         LibaryIndex: string, 
-
+        
         Save: (string, any, ...any) -> any, 
         Load: (any?, any) -> any,
         CustomElementFetcher: boolean?
@@ -115,8 +107,11 @@ local ElementParser = {}; do
         end,
         function(Element: any?, Data: any)
             if not Element then return end
-            if Element.Value == Data.value then return end
-
+            if Element.Value == Data.value then
+                Element:RunChanged()
+                return
+            end
+            
             Element:SetValue(Data.value)
         end
     )
@@ -128,7 +123,10 @@ local ElementParser = {}; do
         end,
         function(Element: any?, Data: any)
             if not Element then return end
-            if Element.Value == Data.value then return end
+            if Element.Value == Data.value then
+                Element:RunChanged()
+                return
+            end
 
             Element:SetValue(Data.value)
         end
@@ -141,8 +139,11 @@ local ElementParser = {}; do
         end,
         function(Element: any?, Data: any)
             if not Element then return end
-            if Element.Value == Data.value then return end
-
+            if Element.Value == Data.value then
+                Element:RunChanged()
+                return
+            end
+            
             Element:SetValue(Data.value)
         end
     )
@@ -154,7 +155,7 @@ local ElementParser = {}; do
         end,
         function(Element: any?, Data: any)
             if not Element then return end
-
+            
             Element:SetValueRGB(Color3.fromHex(Data.value), Data.transparency)
         end
     )
@@ -166,7 +167,7 @@ local ElementParser = {}; do
         end,
         function(Element: any?, Data: any)
             if not Element then return end
-
+            
             Element:SetValue({ Data.key, Data.mode, Data.modifiers })
             if Data.mode == "Toggle" and Data.toggled ~= nil then
                 Element.Toggled = Data.toggled
@@ -183,7 +184,11 @@ local ElementParser = {}; do
         function(Element: any?, Data: any)
             if not Element then return end
             if typeof(Data.text) ~= "string" then return end
-            if Element.Value == Data.text then return end
+
+            if Element.Value == Data.text then
+                Element:RunChanged()
+                return
+            end
 
             Element:SetValue(Data.text)
         end
@@ -192,7 +197,12 @@ local ElementParser = {}; do
     CreateParser(
         "Groupbox", "Tabs",
         function(Index: string, Groupbox: any, TabIndex: string)
-            return { collapsed = Groupbox.Collapsed, tabIdx = TabIndex }
+            return {
+                tabIdx = TabIndex,
+                collapsed = Groupbox.Collapsed,
+                poppedOut = Groupbox.PoppedOut == true,
+                popoutPos = if Groupbox.PoppedOut and Groupbox.PopOutFloat then SpecialValueParser.UDim2.Encode(Groupbox.PopOutFloat.Position) else nil,
+            }
         end,
         function(_, Data: any)
             local TabIndex, Index = Data.tabIdx, Data.idx
@@ -203,15 +213,61 @@ local ElementParser = {}; do
             if not Tab then return end
 
             local Groupbox = Tab.Groupboxes[Index]
-            if not Groupbox or Groupbox.Collapsed == Data.collapsed then return end
+            if not Groupbox then return end
 
-            Groupbox:SetCollapsed(Data.collapsed == true)
+            --// Collapsed
+            if Groupbox.Collapsed ~= Data.collapsed then
+                Groupbox:SetCollapsed(Data.collapsed == true)
+            end
+
+            --// Popout
+            if Groupbox.PopOutEnabled then
+                if Data.poppedOut == true then
+                    local Position = SpecialValueParser.UDim2.Decode(Data.popoutPos)
+                    Groupbox:SetPoppedOut(true, Position)
+                elseif Groupbox.PoppedOut then
+                    Groupbox:SetPoppedOut(false)
+                end
+            end
+        end,
+        true
+    )
+
+    CreateParser(
+        "Tabbox", "Tabs",
+        function(Index: string, Tabbox: any, TabIndex: string)
+            return {
+                tabIdx = TabIndex,
+                poppedOut = Tabbox.PoppedOut == true,
+                popoutPos = if Tabbox.PoppedOut and Tabbox.PopOutFloat then SpecialValueParser.UDim2.Encode(Tabbox.PopOutFloat.Position) else nil,
+            }
+        end,
+        function(_, Data: any)
+            local TabIndex, Index = Data.tabIdx, Data.idx
+            if typeof(TabIndex) ~= "string" or typeof(Index) ~= "string" then return end
+
+            local Tabs = SaveManager.Library and SaveManager.Library.Tabs
+            local Tab = Tabs and Tabs[TabIndex]
+            if not Tab then return end
+
+            local Tabbox = Tab.Tabboxes and Tab.Tabboxes[Index]
+            if not Tabbox then return end
+
+            --// Popout
+            if Tabbox.PopOutEnabled then
+                if Data.poppedOut == true then
+                    local Position = SpecialValueParser.UDim2.Decode(Data.popoutPos)
+                    Tabbox:SetPoppedOut(true, Position)
+                elseif Tabbox.PoppedOut then
+                    Tabbox:SetPoppedOut(false)
+                end
+            end
         end,
         true
     )
 end
 
---// 辅助函数 \\--
+--// Helpers \\--
 local function Trim(Text: string)
     return Text:match("^%s*(.-)%s*$")
 end
@@ -228,17 +284,17 @@ local function IsValidFolderPath(Name: string): boolean
     )
 end
 
---// 文件夹辅助 \\--
+--// Folder helper \\--
 local function SplitPath(Path: string): {string}
-        local Result = {}
-        local Current = ""
+    local Result = {}
+    local Current = ""
 
-        for Part in string.gmatch(Path, "[^/]+") do
-                Current = if Current == "" then Part else (Current .. "/" .. Part)
-                table.insert(Result, Current)
-        end
+    for Part in string.gmatch(Path, "[^/]+") do
+        Current = if Current == "" then Part else (Current .. "/" .. Part)
+        table.insert(Result, Current)
+    end
 
-        return Result
+    return Result
 end
 
 local function GetFolderPath(): false | string
@@ -262,7 +318,7 @@ local function GetCurrentSettingsPath(): false | string
     return if SubFolderPath == false then GetFolderPath() else SubFolderPath
 end
 
---// 文件辅助 \\--
+--// Files helper \\--
 local function GetConfigPath(ConfigName: string): false | string
     local CurrentSettingsPath = GetCurrentSettingsPath()
     return if CurrentSettingsPath == false then false else string.format("%s/%s.json", CurrentSettingsPath, ConfigName)
@@ -278,14 +334,14 @@ local function GetAutoloadPath(): false | string
     return if CurrentSettingsPath == false then false else string.format("%s/autoload.txt", CurrentSettingsPath)
 end
 
---// 索引设置 \\--
+--// Indexes \\--
 function SaveManager:SetLoadingOrder(Enabled: boolean, Order: {string}?)
     SaveManager.UseLoadingOrder = Enabled == true
     SaveManager.LoadingOrder = typeof(Order) == "table" and Order or SaveManager.LoadingOrder
 end
 
 function SaveManager:SetIgnoreIndexes(Indexes: {string}?)
-    assert(typeof(Indexes) == "table", "期望表，实际收到：" .. typeof(Indexes))
+    assert(typeof(Indexes) == "table", "参数类型错误：需要 table，实际为 " .. typeof(Indexes))
 
     for _, Index in Indexes do
         SaveManager.Ignore[Index] = true
@@ -295,11 +351,11 @@ end
 function SaveManager:IgnoreThemeSettings()
     SaveManager:SetIgnoreIndexes({
         "BackgroundColor", "MainColor", "AccentColor", "OutlineColor", "FontColor", "FontFace", "BackgroundImage",
-        "ThemeManager_ThemeList", "ThemeManager_CustomThemeList", "ThemeManager_CustomThemeName"
+        "ThemeManager_ThemeList", "ThemeManager_CustomThemeList", "ThemeManager_CustomThemeName", "ThemeManager_ThemeJSON"
     })
 end
 
---// 文件夹操作 \\--
+--// Folders \\--
 function SaveManager:GetPaths(): {string}
     local SubFolderPath = GetSubFolderPath()
     if SubFolderPath == false then
@@ -324,7 +380,7 @@ function SaveManager:BuildFolderTree(SkipWhenCreated: boolean?)
 
     for _, Path in Paths do
         if isfolder(Path) then continue end
-
+        
         makefolder(Path)
     end
 
@@ -364,16 +420,17 @@ function SaveManager:SetSubFolder(SubFolder: string)
     SaveManager:BuildFolderTree()
 end
 
---// 配置管理 \\--
+--// Config Management \\--
 function SaveManager:RefreshConfigList()
     local SettingsPath = GetCurrentSettingsPath()
     if SettingsPath == false then
         return {}
     end
 
+    pcall(makefolder, SettingsPath)
     local SuccessList, Files = pcall(listfiles, SettingsPath)
     if not (SuccessList and typeof(Files) == "table") then
-        SaveManager.Library:Notify(string.format("加载配置列表失败：%s", tostring(Files)))
+        SaveManager.Library:Notify(string.format("读取配置列表失败：%s", tostring(Files)))
         return {}
     end
 
@@ -392,36 +449,42 @@ function SaveManager:RefreshConfigList()
     return FileNames
 end
 
-function SaveManager:Save(ConfigName: string): (boolean, string?)
-    if IsStringEmpty(ConfigName) then
-        return false, "提供的配置名无效"
-    end
-
-    if string.lower(ConfigName) == "autoload" then
-        return false, "提供的配置名无效"
-    end
-
-    local ConfigPath = GetConfigPath(ConfigName)
-    if ConfigPath == false then
-        return false, "提供的配置名无效"
-    end
-
-    SaveManager:CheckFolderTree()
-
+function SaveManager:SaveJSON(ConfigName)
     local Library = SaveManager.Library
     local IgnoreIndexes = SaveManager.Ignore
     local CurrentData = {
         timestamp = os.date("%d.%m.%Y %H:%M:%S"),
-        name = ConfigName,
+        name = ConfigName or "",
 
         objects = {},
-        keybindMenu = if Library.KeybindFrame then {
-            visible = Library.KeybindFrame.Visible,
-            position = SpecialValueParser.UDim2.Encode(Library.KeybindFrame.Position)
-        } else nil
+        keybindMenu = nil,
     }
 
-    --// 开关
+    if Library.KeybindFrame then
+        local Hidden = {}
+        for Index, Option in Library.Options do
+            if Option.Type == "KeyPicker" and Option.NoUI ~= true and Option.MenuVisible == false then
+                Hidden[Index] = true
+            end
+        end
+
+        local KeybindMenu = Library.KeybindMenu
+        local SettingsPosition = nil
+        if KeybindMenu and KeybindMenu.SettingsFrame then
+            SettingsPosition = SpecialValueParser.UDim2.Encode(KeybindMenu.SettingsFrame.Position)
+        end
+
+        CurrentData.keybindMenu = {
+            visible = Library.KeybindFrame.Visible,
+            position = SpecialValueParser.UDim2.Encode(Library.KeybindFrame.Position),
+            collapsed = if KeybindMenu then KeybindMenu.Collapsed == true else false,
+            settingsOpen = false,
+            settingsPosition = SettingsPosition,
+            hidden = Hidden,
+        }
+    end
+
+    --// Toggles
     for Index, Toggle in Library.Toggles do
         if not Toggle.Type then continue end
         if IgnoreIndexes[Index] then continue end
@@ -432,7 +495,7 @@ function SaveManager:Save(ConfigName: string): (boolean, string?)
         table.insert(CurrentData.objects, Parser.Save(Index, Toggle))
     end
 
-    --// 选项
+    --// Options
     for Index, Option in Library.Options do
         if not Option.Type then continue end
         if IgnoreIndexes[Index] then continue end
@@ -443,23 +506,58 @@ function SaveManager:Save(ConfigName: string): (boolean, string?)
         table.insert(CurrentData.objects, Parser.Save(Index, Option))
     end
 
-    --// 分组框
+    --// Groupboxes, Tabboxes
     for TabIndex, Tab in Library.Tabs do
-        if not Tab.Groupboxes then continue end
+        if Tab.Groupboxes then
+            for Index, Groupbox in Tab.Groupboxes do
+                if typeof(Index) ~= "string" or IgnoreIndexes[Index] then continue end
 
-        for Index, Groupbox in Tab.Groupboxes do
-            if IgnoreIndexes[Index] then continue end
+                local Parser = ElementParser.Groupbox
+                if not Parser then continue end
 
-            local Parser = ElementParser.Groupbox
-            if not Parser then continue end
+                table.insert(CurrentData.objects, Parser.Save(Index, Groupbox, TabIndex))
+            end
+        end
 
-            table.insert(CurrentData.objects, Parser.Save(Index, Groupbox, TabIndex))
+        if Tab.Tabboxes then
+            for Index, Tabbox in Tab.Tabboxes do
+                if typeof(Index) ~= "string" or IgnoreIndexes[Index] then continue end
+
+                local Parser = ElementParser.Tabbox
+                if not Parser then continue end
+
+                table.insert(CurrentData.objects, Parser.Save(Index, Tabbox, TabIndex))
+            end
         end
     end
 
     local SuccessEncode, EncodedData = pcall(HttpService.JSONEncode, HttpService, CurrentData)
     if not SuccessEncode then
-        return false, "数据编码失败"
+        return "", false, "数据编码失败"
+    end
+
+    return EncodedData, true
+end
+
+function SaveManager:Save(ConfigName: string): (boolean, string?)
+    if IsStringEmpty(ConfigName) then
+        return false, "配置名称无效"
+    end
+
+    if string.lower(ConfigName) == "autoload" then
+        return false, "配置名称无效"
+    end
+
+    local ConfigPath = GetConfigPath(ConfigName)
+    if ConfigPath == false then
+        return false, "配置名称无效"
+    end
+
+    SaveManager:CheckFolderTree()
+
+    local EncodedData, SuccessEncode, EncodeErrorMessage = SaveManager:SaveJSON(ConfigName)
+    if not SuccessEncode then
+        return false, EncodeErrorMessage
     end
 
     local SuccessWrite, ErrorMessage = pcall(writefile, ConfigPath, EncodedData)
@@ -470,24 +568,14 @@ function SaveManager:Save(ConfigName: string): (boolean, string?)
     return true
 end
 
-function SaveManager:Load(ConfigName: string): (boolean, string?)
-    if IsStringEmpty(ConfigName) then
-        return false, "未选择任何配置"
-    end
-
-    local ConfigPath = GetConfigPath(ConfigName)
-    if ConfigPath == false or not isfile(ConfigPath) then
-        return false, "配置文件不存在"
-    end
-
-    local SuccessRead, Content = pcall(readfile, ConfigPath)
-    if not SuccessRead then
-        return false, "读取配置文件失败"
+function SaveManager:LoadJSON(Content: string)
+    if IsStringEmpty(Content) then
+        return false, "未提供 JSON 内容"
     end
 
     local SuccessDecode, Decoded = pcall(HttpService.JSONDecode, HttpService, Content)
     if not SuccessDecode or typeof(Decoded) ~= "table" or typeof(Decoded.objects) ~= "table" then
-        return false, "解码配置数据失败"
+        return false, "配置数据解析失败"
     end
 
     local Library = SaveManager.Library
@@ -502,7 +590,7 @@ function SaveManager:Load(ConfigName: string): (boolean, string?)
         end)
     end
 
-    --// 按键菜单
+    --// Keybind Menu
     if Library.KeybindFrame and typeof(Decoded.keybindMenu) == "table" then
         local KeybindFrameData = Decoded.keybindMenu
         local IsVisible = KeybindFrameData.visible == true
@@ -515,9 +603,32 @@ function SaveManager:Load(ConfigName: string): (boolean, string?)
         if KeybindMenuToggle then
             KeybindMenuToggle:SetValue(IsVisible)
         end
+
+        local KeybindMenu = Library.KeybindMenu
+        if KeybindMenu then
+            if KeybindMenu.SetCollapsed then
+                KeybindMenu:SetCollapsed(KeybindFrameData.collapsed == true)
+            end
+
+            if typeof(KeybindFrameData.hidden) == "table" then
+                for Index, Option in Library.Options do
+                    if Option.Type ~= "KeyPicker" or Option.NoUI == true or not Option.SetMenuVisibility then
+                        continue
+                    end
+
+                    Option:SetMenuVisibility(KeybindFrameData.hidden[Index] ~= true)
+                end
+            end
+
+            local SettingsPosition = SpecialValueParser.UDim2.Decode(KeybindFrameData.settingsPosition)
+            if SettingsPosition and KeybindMenu.SettingsFrame then
+                KeybindMenu.SettingsFrame.Position = SettingsPosition
+            end
+            KeybindMenu:SetSettingsOpen(false)
+        end
     end
 
-    --// 元素
+    --// Elements
     for _, Option in Decoded.objects do
         if not Option.type then continue end
         if IgnoreIndexes[Option.idx] then continue end
@@ -525,15 +636,33 @@ function SaveManager:Load(ConfigName: string): (boolean, string?)
         local Parser = ElementParser[Option.type]
         if not Parser then continue end
 
-        task.spawn(Parser.Load, Option.idx, Option)
+        task.defer(Parser.Load, Option.idx, Option)
     end
 
     return true
 end
 
+function SaveManager:Load(ConfigName: string): (boolean, string?)
+    if IsStringEmpty(ConfigName) then
+        return false, "尚未选择配置"
+    end
+
+    local ConfigPath = GetConfigPath(ConfigName)
+    if ConfigPath == false or not isfile(ConfigPath) then
+        return false, "配置文件不存在"
+    end
+
+    local SuccessRead, Content = pcall(readfile, ConfigPath)
+    if not SuccessRead then
+        return false, "读取配置文件失败"
+    end
+
+    return SaveManager:LoadJSON(Content)
+end
+
 function SaveManager:Delete(ConfigName: string): (boolean | string?)
     if IsStringEmpty(ConfigName) then
-        return false, "未选择任何配置"
+        return false, "尚未选择配置"
     end
 
     local ConfigPath = GetConfigPath(ConfigName)
@@ -553,7 +682,7 @@ function SaveManager:Delete(ConfigName: string): (boolean | string?)
     return true
 end
 
---// 自动加载配置 \\--
+--// Auto Load Config \\--
 function SaveManager:GetAutoloadConfig(): (string, boolean, string?)
     SaveManager:CheckFolderTree()
 
@@ -582,7 +711,7 @@ end
 
 function SaveManager:SaveAutoloadConfig(ConfigName: string): (boolean, string?)
     if IsStringEmpty(ConfigName) then
-        return false, "未选择任何配置"
+        return false, "尚未选择配置"
     end
 
     SaveManager:CheckFolderTree()
@@ -609,7 +738,7 @@ function SaveManager:LoadAutoloadConfig()
     local ConfigName, Success, FetchErrorMessage = SaveManager:GetAutoloadConfig()
     if not Success or FetchErrorMessage then
         if FetchErrorMessage ~= "未设置自动加载配置" then
-            SaveManager.Library:Notify(string.format("加载自动加载配置失败：%s", FetchErrorMessage))
+            SaveManager.Library:Notify(string.format("自动加载配置失败：%s", FetchErrorMessage))
         end
 
         return
@@ -617,11 +746,11 @@ function SaveManager:LoadAutoloadConfig()
 
     local SuccessLoad, LoadErrorMessage = SaveManager:Load(ConfigName)
     if not SuccessLoad then
-        SaveManager.Library:Notify(string.format("加载自动加载配置失败：%s", LoadErrorMessage))
+        SaveManager.Library:Notify(string.format("自动加载配置失败：%s", LoadErrorMessage))
         return
     end
 
-    SaveManager.Library:Notify(string.format("成功加载自动加载配置 %q", ConfigName))
+    SaveManager.Library:Notify(string.format("已自动加载配置 %q", ConfigName))
 end
 
 function SaveManager:DeleteAutoLoadConfig(): (boolean, string?)
@@ -645,7 +774,7 @@ function SaveManager:DeleteAutoLoadConfig(): (boolean, string?)
     return true
 end
 
---// 图形界面 \\--
+--// GUI \\--
 local function ShowDialog(
     Condition: () -> boolean,
 
@@ -689,10 +818,14 @@ local function ShowDialog(
 end
 
 function SaveManager:BuildConfigSection(Tab: any, IconName: string)
-    assert(SaveManager.Library, "库未设置，请先调用 SaveManager:SetLibrary(Library)")
-    local ConfigurationBox = Tab:AddRightGroupbox("配置", IconName or "folder-cog")
+    assert(SaveManager.Library, "尚未设置库，请先调用 SaveManager:SetLibrary(Library)。")
+    local ConfigurationBox = Tab:AddGroupbox({
+        Side = "Right",
+        Name = "配置管理",
+        IconName = IconName or "folder-cog",
+    })
 
-    local ConfigNameInput, ConfigList, AutoloadConfigLabel
+    local ConfigNameInput, ConfigList, ConfigJSONInput, AutoloadConfigLabel
     local function RefreshList()
         ConfigList:SetValues(SaveManager:RefreshConfigList())
         ConfigList:SetValue(nil)
@@ -705,23 +838,23 @@ function SaveManager:BuildConfigSection(Tab: any, IconName: string)
         if ConfigList then RefreshList() end
     end
 
-    --// 创建
+    --// Create
     ConfigurationBox:AddInput("SaveManager_ConfigName", {
-        Text = "配置名"
+        Text = "配置名称"
     })
 
     ConfigurationBox:AddButton("创建配置", function()
         local ConfigName = ConfigNameInput.Value
         if IsStringEmpty(ConfigName) then
-            SaveManager.Library:Notify("配置名不能为空。")
+            SaveManager.Library:Notify("配置名称不能为空。")
             return
         end
 
         if string.lower(ConfigName) == "autoload" then
-            SaveManager.Library:Notify("提供的配置名无效。")
+            SaveManager.Library:Notify("配置名称无效。")
             return
         end
-
+        
         ShowDialog(
             function(): boolean
                 return DoesConfigExist(ConfigName)
@@ -729,7 +862,7 @@ function SaveManager:BuildConfigSection(Tab: any, IconName: string)
 
             "SaveManager_CreateConfig",
             "配置已存在",
-            string.format("名为 %q 的配置已存在。覆盖将用你当前的设置替换它。", ConfigName),
+            string.format("名为 %q 的配置已存在，覆盖后将用当前设置替换原内容。", ConfigName),
 
             "覆盖",
             function()
@@ -739,7 +872,7 @@ function SaveManager:BuildConfigSection(Tab: any, IconName: string)
                     return
                 end
 
-                SaveManager.Library:Notify(string.format("成功创建配置 %q", ConfigName))
+                SaveManager.Library:Notify(string.format("已创建配置 %q", ConfigName))
                 RefreshList()
             end
         )
@@ -747,7 +880,7 @@ function SaveManager:BuildConfigSection(Tab: any, IconName: string)
 
     ConfigurationBox:AddDivider()
 
-    --// 管理
+    --// Manage
     ConfigurationBox:AddDropdown("SaveManager_ConfigList", {
         Text = "配置列表",
 
@@ -782,16 +915,29 @@ function SaveManager:BuildConfigSection(Tab: any, IconName: string)
                 return
             end
 
-            local Success, ErrorMessage = SaveManager:Load(ConfigName)
-            if not Success then
-                SaveManager.Library:Notify(string.format("加载配置 %q 失败：%s", ConfigName, ErrorMessage))
-                return
-            end
+            ShowDialog(
+                function(): boolean
+                    return true --// Always show
+                end,
 
-            SaveManager.Library:Notify(string.format("成功加载配置 %q", ConfigName))
+                "SaveManager_LoadConfig",
+                "加载配置",
+                string.format("确定要加载 %q 吗？当前设置将被覆盖。", ConfigName),
+
+                "加载",
+                function()
+                    local Success, ErrorMessage = SaveManager:Load(ConfigName)
+                    if not Success then
+                        SaveManager.Library:Notify(string.format("加载配置 %q 失败：%s", ConfigName, ErrorMessage))
+                        return
+                    end
+
+                    SaveManager.Library:Notify(string.format("已加载配置 %q", ConfigName))
+                end
+            )
         end
     })
-
+    
     ConfigurationBox:AddButton({
         Text = "覆盖配置",
         DoubleClick = false,
@@ -805,12 +951,12 @@ function SaveManager:BuildConfigSection(Tab: any, IconName: string)
 
             ShowDialog(
                 function(): boolean
-                    return true --// 始终显示
+                    return true --// Always show
                 end,
 
                 "SaveManager_OverwriteConfig",
                 "覆盖配置",
-                string.format("你确定要用当前设置覆盖 %q 吗？此操作无法撤销。", ConfigName),
+                string.format("确定要用当前设置覆盖 %q 吗？此操作无法撤销。", ConfigName),
 
                 "覆盖",
                 function()
@@ -820,7 +966,7 @@ function SaveManager:BuildConfigSection(Tab: any, IconName: string)
                         return
                     end
 
-                    SaveManager.Library:Notify(string.format("成功覆盖配置 %q", ConfigName))
+                    SaveManager.Library:Notify(string.format("已覆盖配置 %q", ConfigName))
                 end
             )
         end
@@ -839,13 +985,13 @@ function SaveManager:BuildConfigSection(Tab: any, IconName: string)
 
             ShowDialog(
                 function(): boolean
-                    return true --// 始终显示
+                    return true --// Always show
                 end,
 
                 "SaveManager_DeleteConfig",
                 "删除配置",
-                string.format("你确定要删除 %q 吗？此操作无法撤销。", ConfigName),
-
+                string.format("确定要删除 %q 吗？此操作无法撤销。", ConfigName),
+                
                 "删除",
                 function()
                     local Success, ErrorMessage = SaveManager:Delete(ConfigName)
@@ -854,7 +1000,7 @@ function SaveManager:BuildConfigSection(Tab: any, IconName: string)
                         return
                     end
 
-                    SaveManager.Library:Notify(string.format("成功删除配置 %q", ConfigName))
+                    SaveManager.Library:Notify(string.format("已删除配置 %q", ConfigName))
                     RefreshAutoloadConfigLabel()
                 end
             )
@@ -863,7 +1009,7 @@ function SaveManager:BuildConfigSection(Tab: any, IconName: string)
 
     ConfigurationBox:AddButton("刷新列表", RefreshList)
 
-    --// 自动加载配置
+    --// Autoload Config
     ConfigurationBox:AddButton({
         Text = "设为自动加载",
         DoubleClick = false,
@@ -881,7 +1027,7 @@ function SaveManager:BuildConfigSection(Tab: any, IconName: string)
                 return
             end
 
-            SaveManager.Library:Notify(string.format("成功将自动加载配置设为 %q", ConfigName))
+            SaveManager.Library:Notify(string.format("已将 %q 设为自动加载配置", ConfigName))
             RefreshAutoloadConfigLabel()
         end
     })
@@ -893,13 +1039,13 @@ function SaveManager:BuildConfigSection(Tab: any, IconName: string)
         Func = function()
             ShowDialog(
                 function(): boolean
-                    return true --// 始终显示
+                    return true --// Always show
                 end,
 
                 "SaveManager_ResetAutoload",
                 "重置自动加载配置",
-                "你确定要清除自动加载配置吗？下次启动时将不会自动加载任何配置。",
-
+                "确定要清除自动加载配置吗？下次启动时将不再自动加载任何配置。",
+                
                 "重置",
                 function()
                     local Success, ErrorMessage = SaveManager:DeleteAutoLoadConfig()
@@ -908,7 +1054,7 @@ function SaveManager:BuildConfigSection(Tab: any, IconName: string)
                         return
                     end
 
-                    SaveManager.Library:Notify("成功重置自动加载配置。")
+                    SaveManager.Library:Notify("已重置自动加载配置。")
                     RefreshAutoloadConfigLabel()
                 end
             )
@@ -917,14 +1063,65 @@ function SaveManager:BuildConfigSection(Tab: any, IconName: string)
 
     AutoloadConfigLabel = ConfigurationBox:AddLabel("当前自动加载配置：...", true);
 
-    --// 设置变量
-    ConfigNameInput, ConfigList = 
-        SaveManager.Library.Options.SaveManager_ConfigName, 
-        SaveManager.Library.Options.SaveManager_ConfigList;
+    ConfigurationBox:AddDivider()
 
-    --// 刷新
+    --// Import & Export
+    ConfigurationBox:AddInput("SaveManager_JSON", {
+        Text = "配置 JSON"
+    })
+
+    ConfigurationBox:AddButton("导入配置", function()
+        local ConfigJSON = ConfigJSONInput.Value
+        if IsStringEmpty(ConfigJSON) then
+            SaveManager.Library:Notify("配置 JSON 不能为空")
+            return
+        end
+
+        ShowDialog(
+            function(): boolean
+                return true --// Always show
+            end,
+
+            "SaveManager_ImportConfig",
+            "导入配置",
+            "确定要导入此配置吗？当前设置将被覆盖。",
+
+            "导入",
+            function()
+                local Success, ErrorMessage = SaveManager:LoadJSON(ConfigJSON)
+                if not Success then
+                    SaveManager.Library:Notify(string.format("导入配置失败：%s", ErrorMessage))
+                    return
+                end
+
+                SaveManager.Library:Notify("配置导入成功")
+            end
+        )
+    end)
+
+    ConfigurationBox:AddButton("导出当前配置", function()
+        local EncodedData, Success, ErrorMessage = SaveManager:SaveJSON()
+        if not Success  then
+            SaveManager.Library:Notify(ErrorMessage)
+            return
+        end
+
+        ConfigJSONInput:SetValue(EncodedData)
+        if setclipboard then
+            setclipboard(EncodedData)
+            SaveManager.Library:Notify("配置已复制到剪贴板")
+        end
+    end)
+
+    --// Set variables
+    ConfigNameInput, ConfigList, ConfigJSONInput =
+        SaveManager.Library.Options.SaveManager_ConfigName, 
+        SaveManager.Library.Options.SaveManager_ConfigList,
+        SaveManager.Library.Options.SaveManager_JSON;
+
+    --// Refresh
     RefreshAutoloadConfigLabel()
-    SaveManager:SetIgnoreIndexes({ "SaveManager_ConfigList", "SaveManager_ConfigName" })
+    SaveManager:SetIgnoreIndexes({ "SaveManager_ConfigList", "SaveManager_ConfigName", "SaveManager_JSON" })
 
     return ConfigurationBox
 end
