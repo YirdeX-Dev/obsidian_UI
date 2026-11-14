@@ -195,6 +195,7 @@ local Library = {
     KeybindFrame = nil,
     KeybindContainer = nil,
     KeybindToggles = {},
+    KeybindMenu = nil,
 
     --// Notifications \\--
     Notifications = {},
@@ -270,22 +271,22 @@ local Library = {
     OriginalMinSize = Vector2.new(480, 360),
     MinSize = Vector2.new(480, 360),
     DPIScale = 1,
-    CornerRadius = 8,
+    CornerRadius = 4,
 
     --// Scheme \\--
     IsLightTheme = false,
-Scheme = {
-    BackgroundColor = Color3.fromRGB(15, 15, 15),
-    MainColor = Color3.fromRGB(25, 25, 25),
-    AccentColor = Color3.fromRGB(0, 255, 255),
-    OutlineColor = Color3.fromRGB(40, 40, 40),
-    FontColor = Color3.fromRGB(255, 255, 255),
-    Font = Font.fromEnum(Enum.Font.Code),
+    Scheme = {
+        BackgroundColor = Color3.fromRGB(15, 15, 15),
+        MainColor = Color3.fromRGB(25, 25, 25),
+        AccentColor = Color3.fromRGB(125, 85, 255),
+        OutlineColor = Color3.fromRGB(40, 40, 40),
+        FontColor = Color3.new(1, 1, 1),
+        Font = Font.fromEnum(Enum.Font.Code),
 
-    RedColor = Color3.fromRGB(255, 50, 50),
-    DestructiveColor = Color3.fromRGB(220, 38, 38),
-    DarkColor = Color3.new(0, 0, 0),
-    WhiteColor = Color3.new(1, 1, 1),
+        RedColor = Color3.fromRGB(255, 50, 50),
+        DestructiveColor = Color3.fromRGB(220, 38, 38),
+        DarkColor = Color3.new(0, 0, 0),
+        WhiteColor = Color3.new(1, 1, 1),
 
         BackgroundImage = ""
     },
@@ -392,7 +393,7 @@ local Templates = {
         SearchbarSize = UDim2.fromScale(1, 1),
         GlobalSearch = false,
 
-        CornerRadius = 8,
+        CornerRadius = 4,
         NotifySide = "Right",
         ShowCustomCursor = true,
 
@@ -450,6 +451,7 @@ local Templates = {
         Visible = true,
         Collapsed = false,
         DisableCollapsing = false,
+        MaxHeight = nil,
         PopOut = true,
         MaxPopOutHeight = nil,
         PopOutWidth = nil,
@@ -457,9 +459,13 @@ local Templates = {
     Tabbox = {
         Side = 1,
         Name = nil,
+        MaxHeight = nil,
         PopOut = true,
         MaxPopOutHeight = nil,
         PopOutWidth = nil,
+    },
+    Settings = {
+        Width = nil,
     },
     Dialog = {
         Title = "Dialog",
@@ -546,6 +552,7 @@ local Templates = {
         DragSelect = false,
         MaxVisibleDropdownItems = 8,
         KeepDisabledValuePosition = false,
+        AutoWidth = false,
 
         Callback = function() end,
         Changed = function() end,
@@ -666,6 +673,11 @@ local function GetSchemeValue(Index)
     return Library.Scheme[Index]
 end
 
+local function GetTextStrokeColor(): Color3
+    local Color = Library.Scheme.FontColor
+    return (Color.R * 0.299 + Color.G * 0.587 + Color.B * 0.114) > 0.5 and Library.Scheme.DarkColor or Library.Scheme.WhiteColor
+end
+
 --// Basic Functions \\--
 local function WaitForEvent(Event, Timeout, Condition)
     local Bindable = Instance.new("BindableEvent")
@@ -735,6 +747,14 @@ local function IsSequentialArray(Table: { [any]: any })
     return true
 end
 
+local function IsDropdownDivider(Value: any): boolean
+    return typeof(Value) == "table" and Value.DropdownDivider == true
+end
+
+function Library:DropdownDivider(Title: string?)
+    return { DropdownDivider = true, Title = Title }
+end
+
 local function StopTween(Tween: TweenBase, Destroy: boolean?)
     if not Tween then
         return
@@ -763,6 +783,19 @@ local function Round(Value, Rounding)
 end
 
 --// Fuzzy Search \\--
+local function LowerText(Text: string): string
+    return (Text:lower():gsub("[\195\206\208][\128-\191]", function(Char)
+        local Code = utf8.codepoint(Char)
+        if (Code >= 0xC0 and Code <= 0xDE and Code ~= 0xD7) or (Code >= 0x391 and Code <= 0x3AB) or (Code >= 0x410 and Code <= 0x42F) then
+            return utf8.char(Code + 32)
+        elseif Code >= 0x400 and Code <= 0x40F then
+            return utf8.char(Code + 80)
+        end
+
+        return Char
+    end))
+end
+
 local function FuzzyScore(Text: string, Search: string): (boolean, number)
     if Search == "" then
         return true, 0
@@ -781,7 +814,11 @@ local function FuzzyScore(Text: string, Search: string): (boolean, number)
     end
 
     --// Fallback: fuzzy, in-order, non-consecutive character matching \\--
-    local TextLen, SearchLen = Text:len(), Search:len()
+    local TextChars, SearchChars = {}, {}
+    for Char in Text:gmatch(utf8.charpattern) do table.insert(TextChars, Char) end
+    for Char in Search:gmatch(utf8.charpattern) do table.insert(SearchChars, Char) end
+
+    local TextLen, SearchLen = #TextChars, #SearchChars
     if SearchLen > TextLen then
         return false, 0
     end
@@ -796,8 +833,8 @@ local function FuzzyScore(Text: string, Search: string): (boolean, number)
             break
         end
 
-        if Text:sub(TextIdx, TextIdx) == Search:sub(SearchIdx, SearchIdx) then
-            local PrevChar = TextIdx > 1 and Text:sub(TextIdx - 1, TextIdx - 1) or ""
+        if TextChars[TextIdx] == SearchChars[SearchIdx] then
+            local PrevChar = TextIdx > 1 and TextChars[TextIdx - 1] or ""
             local AtBoundary = TextIdx == 1 or PrevChar:match("[%s%p_]") ~= nil
 
             RunLength = (LastMatchIdx == TextIdx - 1) and (RunLength + 1) or 1
@@ -825,7 +862,7 @@ local function TryFuzzyMatch(Text: any, Search: string): (boolean, number)
         return false, 0
     end
 
-    return FuzzyScore(Text:lower(), Search)
+    return FuzzyScore(LowerText(Text), Search)
 end
 
 local function FuzzyMatchScore(Text: any, Search: string): number
@@ -833,7 +870,7 @@ local function FuzzyMatchScore(Text: any, Search: string): number
         return 0
     end
 
-    local Normalized = NormalizeSearch(Text:lower())
+    local Normalized = NormalizeSearch(LowerText(Text))
     local Matched, Score = FuzzyScore(Normalized, Search)
     if not Matched then
         return 0
@@ -871,6 +908,10 @@ local function MatchesSearch(ElementInfo, Search: string, ForceMatch: boolean?):
             Checked += 1
             if Checked > 200 then
                 break
+            end
+
+            if IsDropdownDivider(Value) then
+                continue
             end
 
             if TryFuzzyMatch(Value, Search) or (typeof(Value) ~= "string" and TryFuzzyMatch(tostring(Value), Search)) then
@@ -999,15 +1040,13 @@ local function RestoreDepbox(Box)
         end
     end
 
-    Box:Resize()
-    Box.Holder.Visible = true
-
     for _, Depbox in Box.DependencyBoxes do
-        if not Depbox.Visible then
-            continue
-        end
-
         RestoreDepbox(Depbox)
+    end
+
+    Box.Holder.Visible = Box.Visible
+    if Box.Visible then
+        Box:Resize()
     end
 end
 
@@ -1018,6 +1057,27 @@ function SyncPopOutVisibility(Box: any)
     end
 
     Box.PopOutFloat.Visible = Box.BoxHolder.Visible ~= false and Box.Visible ~= false
+end
+
+local function RegisterPopOutClone(Source: Instance, Clone: Instance)
+    local SourceProps = Library.Registry[Source]
+    if SourceProps then
+        local CloneProps = {}
+        for Property, Index in SourceProps do
+            if Property ~= "FontFace" then
+                CloneProps[Property] = Index
+            end
+        end
+        if next(CloneProps) then
+            Library.Registry[Clone] = CloneProps
+        end
+    end
+
+    local SourceChildren = Source:GetChildren()
+    local CloneChildren = Clone:GetChildren()
+    for Index = 1, math.min(#SourceChildren, #CloneChildren) do
+        RegisterPopOutClone(SourceChildren[Index], CloneChildren[Index])
+    end
 end
 
 local function DimPopOutClone(Root: GuiObject)
@@ -1280,6 +1340,7 @@ local function ApplySearchToTab(Tab, Search)
 
     return HasVisible, BestScore
 end
+
 local function ResetTab(Tab)
     if not Tab then
         return
@@ -1296,10 +1357,6 @@ local function ResetTab(Tab)
         end
 
         for _, Depbox in Groupbox.DependencyBoxes do
-            if not Depbox.Visible then
-                continue
-            end
-
             RestoreDepbox(Depbox)
         end
 
@@ -1320,10 +1377,6 @@ local function ResetTab(Tab)
             end
 
             for _, Depbox in SubTab.DependencyBoxes do
-                if not Depbox.Visible then
-                    continue
-                end
-
                 RestoreDepbox(Depbox)
             end
 
@@ -1343,7 +1396,7 @@ function Library:UpdateSearch(SearchText)
 
     local TabsToSearch = {}
     for _, Tab in Library.Tabs do
-        if typeof(Tab) == "table" and not Tab.IsKeyTab then
+        if typeof(Tab) == "table" and not Tab.IsKeyTab and not Tab.IsCustomTab and not Tab.HasSubTabs then
             table.insert(TabsToSearch, Tab)
         end
     end
@@ -1352,7 +1405,7 @@ function Library:UpdateSearch(SearchText)
         ResetTab(Tab)
     end
 
-    local Search = NormalizeSearch(SearchText:lower())
+    local Search = NormalizeSearch(LowerText(SearchText))
     if Trim(Search) == "" then
         Library.Searching = false
         Library.LastSearchTab = nil
@@ -1370,6 +1423,7 @@ function Library:UpdateSearch(SearchText)
     local BestScore = -1
     local ActiveScore = -1
     local ActiveHasVisible = false
+    local CurrentTab = Library.ActiveTab and (Library.ActiveTab.ActiveSubTab or Library.ActiveTab)
 
     for _, Tab in TabsToSearch do
         local HasVisible, Score = ApplySearchToTab(Tab, Search)
@@ -1377,7 +1431,7 @@ function Library:UpdateSearch(SearchText)
             continue
         end
 
-        if Tab == Library.ActiveTab then
+        if Tab == CurrentTab then
             ActiveHasVisible = true
             ActiveScore = Score
         end
@@ -1405,7 +1459,8 @@ function Library:UpdateSearch(SearchText)
                 return
             end
 
-            if Library.ActiveTab ~= BestTab then
+            local Current = Library.ActiveTab and (Library.ActiveTab.ActiveSubTab or Library.ActiveTab)
+            if Current ~= BestTab then
                 BestTab:Show()
             elseif Library.ActiveTab then
                 Library.ActiveTab:RefreshSides()
@@ -1479,6 +1534,9 @@ type Icon = {
     IconName: string,
     ImageRectOffset: Vector2,
     ImageRectSize: Vector2,
+    FontFace: Font?,
+    Text: string?,
+    Custom: boolean?,
 }
 
 type IconModule = {
@@ -1489,17 +1547,13 @@ type IconModule = {
 local FetchIcons = false
 local Icons: IconModule | nil = nil
 
-function Library:GetIcon(IconName: string)
+function Library:GetIcon(IconName: string): Icon?
     if not FetchIcons or not Icons then
-        return
+        return nil
     end
 
     local Success, Icon = pcall(Icons.GetAsset, IconName)
-    if not Success then
-        return
-    end
-
-    return Icon
+    return if Success then Icon else nil
 end
 
 function Library:GetCustomIcon(IconName: string): any
@@ -1532,21 +1586,6 @@ function Library:GetCustomIcon(IconName: string): any
     end
 
     return nil
-end
-
-function Library:ApplyLucideIcon(ImageGui: any, Icon: any, Rotation: number?)
-    if not ImageGui or not Icon then
-        return
-    end
-
-    if not (ImageGui:IsA("ImageLabel") or ImageGui:IsA("ImageButton")) then
-        return
-    end
-
-    ImageGui.Image = Icon.Url or ImageGui.Image
-    ImageGui.ImageRectOffset = Icon.ImageRectOffset or ImageGui.ImageRectOffset 
-    ImageGui.ImageRectSize = Icon.ImageRectSize or ImageGui.ImageRectSize
-    ImageGui.Rotation = Rotation or ImageGui.Rotation
 end
 
 function Library:Validate(Table: { [string]: any }, Template: { [string]: any }): { [string]: any }
@@ -1608,6 +1647,119 @@ local function New(ClassName: string, Properties: { [string]: any }): any
     end
 
     return Instance
+end
+
+--// Icon Instances \\--
+local IconTextProperties = { ImageColor3 = "TextColor3", ImageTransparency = "TextTransparency" }
+local IconSharedProperties = { "Name", "AnchorPoint", "Position", "Size", "SizeConstraint", "LayoutOrder", "ZIndex", "Visible", "Rotation", "ImageColor3", "ImageTransparency" }
+
+local function IconProperties(ClassName: string, Properties: { [string]: any }): { [string]: any }
+    if ClassName ~= "TextLabel" and ClassName ~= "TextButton" then
+        return Properties
+    end
+
+    local Mapped: { [string]: any } = {}
+    for Property, Value in Properties do
+        Mapped[IconTextProperties[Property] or Property] = Value
+    end
+
+    return Mapped
+end
+
+local function IsFontIcon(Icon: Icon?): boolean
+    return Icon ~= nil and Icon.FontFace ~= nil
+end
+
+local function ImageContent(Icon: Icon?): { [string]: any }
+    return {
+        Image = Icon and Icon.Url or "",
+        ImageRectOffset = Icon and Icon.ImageRectOffset or Vector2.zero,
+        ImageRectSize = Icon and Icon.ImageRectSize or Vector2.zero,
+    }
+end
+
+local function SetIconProperties(Target: GuiObject, Properties: { [string]: any })
+    FillInstance(IconProperties(Target.ClassName, Properties), Target)
+end
+
+local function TweenIcon(Target: GuiObject, Properties: { [string]: any }): Tween
+    local Tween = TweenService:Create(Target, Library.TweenInfo, IconProperties(Target.ClassName, Properties))
+    Tween:Play()
+
+    return Tween
+end
+
+function Library:CreateIcon(Icon: Icon?, Properties: { [string]: any }?, IsButton: boolean?): GuiObject
+    local IsFont = IsFontIcon(Icon)
+    local ClassName = (if IsFont then "Text" else "Image") .. (if IsButton then "Button" else "Label")
+
+    local Merged: { [string]: any } = {
+        BackgroundTransparency = 1,
+        ImageColor3 = Color3.new(1, 1, 1),
+    }
+
+    if not IsFont then
+        Merged.ScaleType = Enum.ScaleType.Fit
+    end
+
+    if Properties then
+        for Property, Value in Properties do
+            Merged[Property] = Value
+        end
+    end
+
+    return Library:ApplyIcon(New(ClassName, IconProperties(ClassName, Merged)), Icon)
+end
+
+function Library:ApplyIcon(Target: GuiObject, Icon: Icon?): GuiObject
+    local IsFont = IsFontIcon(Icon)
+    local IsText = Target:IsA("TextLabel") or Target:IsA("TextButton")
+
+    if IsFont ~= IsText then
+        local Theme = Library.Registry[Target] or {}
+        local Properties: { [string]: any } = { Parent = Target.Parent }
+
+        for _, Property in IconSharedProperties do
+            local Source = if IsText then IconTextProperties[Property] or Property else Property
+            Properties[Property] = if Theme[Source] ~= nil then Theme[Source] else (Target :: any)[Source]
+        end
+
+        local Replacement = Library:CreateIcon(Icon, Properties, Target:IsA("GuiButton"))
+        Library:RemoveFromRegistry(Target)
+        Target:Destroy()
+
+        return Replacement
+    end
+
+    if IsFont and Icon then
+        FillInstance({
+            FontFace = Icon.FontFace,
+            RichText = false,
+            Text = Icon.Text,
+            TextScaled = true,
+        }, Target)
+
+        if not Target:FindFirstChild("IconPadding") then
+            New("UIPadding", {
+                Name = "IconPadding",
+                PaddingLeft = UDim.new(-0.5, -0.5),
+                PaddingRight = UDim.new(-0.5, 0),
+                Parent = Target,
+            })
+        end
+    else
+        FillInstance(ImageContent(Icon), Target)
+    end
+
+    return Target
+end
+
+--// DEPRECATED
+function Library:ApplyLucideIcon(ImageGui: ImageLabel | ImageButton, Icon: Icon, Rotation: number?)
+    warn("Obsidian:ApplyLucideIcon is deprecated, please use Obsidian:CreateIcon or Obsidian:ApplyIcon instead.")
+
+    ImageGui.Rotation = Rotation or ImageGui.Rotation
+    FillInstance(ImageContent(Icon), ImageGui)
 end
 
 --// Main Instances \\-
@@ -1764,9 +1916,8 @@ do
         Parent = CursorCross,
     }))
 
-    CursorCustomImage = New("ImageLabel", {
+    CursorCustomImage = Library:CreateIcon(nil, {
         AnchorPoint = Vector2.new(0.5, 0.5),
-        BackgroundTransparency = 1,
         Position = UDim2.fromScale(0.5, 0.5),
         Size = UDim2.fromOffset(20, 20),
         ZIndex = 3,
@@ -1806,7 +1957,7 @@ do
 end
 
 --// Icons \\--
-local CheckIcon, ArrowIcon, ResizeIcon, KeyIcon, MoveIcon, PopOutIcon, CloseIcon
+local CheckIcon, ArrowIcon, ResizeIcon, KeyIcon, MoveIcon, PopOutIcon, CloseIcon, SettingsIcon
 function Library:SetIconModule(module: IconModule)
     FetchIcons = true
     Icons = module
@@ -1818,15 +1969,29 @@ function Library:SetIconModule(module: IconModule)
     MoveIcon = Library:GetIcon("move")
     PopOutIcon = Library:GetIcon("square-arrow-down-left")
     CloseIcon = Library:GetIcon("x")
+    SettingsIcon = Library:GetIcon("settings")
 end
 
 local OnlineFetchIcons, OnlineIcons = pcall(function()
     return (loadstring(
-        game:HttpGet("https://raw.githubusercontent.com/mstudio45/lucide-roblox-direct/refs/heads/main/source.lua")
+        game:HttpGet("https://raw.githubusercontent.com/notpoiu/Molto/refs/heads/main/source.lua")
     ) :: () -> IconModule)()
 end)
-if OnlineFetchIcons and OnlineIcons then
-    Library:SetIconModule(OnlineIcons)
+do
+    if OnlineFetchIcons and OnlineIcons then
+        OnlineIcons.SetProvider("lucide")
+        Library:SetIconModule(OnlineIcons)
+    else
+        OnlineFetchIcons, OnlineIcons = pcall(function()
+            return (loadstring(
+                game:HttpGet("https://raw.githubusercontent.com/notpoiu/lucide-roblox-direct/refs/heads/main/source.lua")
+            ) :: () -> IconModule)()
+        end)
+        
+        if OnlineFetchIcons and OnlineIcons then
+            Library:SetIconModule(OnlineIcons)
+        end
+    end
 end
 
 --// Lib Functions \\--
@@ -1842,8 +2007,8 @@ end
 function Library.Cursor:ResetIcon()
     CursorCross.Visible = true
     CursorCustomImage.Visible = false
-    CursorCustomImage.ImageColor3 = Color3.new(1, 1, 1)
     CursorCustomImage.Size = UDim2.fromOffset(20, 20)
+    SetIconProperties(CursorCustomImage, { ImageColor3 = Color3.new(1, 1, 1) })
 end
 
 function Library.Cursor:ResetCursor()
@@ -1869,13 +2034,13 @@ function Library.Cursor:ChangeIcon(ImageId: string)
     assert(Icon, "Image must be a valid Roblox asset or a valid URL or a valid lucide icon.")
 
     CursorCross.Visible = false
+    CursorCustomImage = Library:ApplyIcon(CursorCustomImage, Icon)
     CursorCustomImage.Visible = true
-    Library:ApplyLucideIcon(CursorCustomImage, Icon)
 end
 
 function Library.Cursor:ChangeIconColor(Color: Color3)
     assert(typeof(Color) == "Color3", "Color3 expected.")
-    CursorCustomImage.ImageColor3 = Color
+    SetIconProperties(CursorCustomImage, { ImageColor3 = Color })
 end
 
 function Library.Cursor:ChangeIconSize(Size: UDim2)
@@ -2450,10 +2615,9 @@ function Library:AddBlank(Frame: GuiObject, Size: UDim2)
 end
 
 --// Animations \\--
-local TransparencyCache = {}
 local ActiveTabTweens = setmetatable({}, { __mode = "k" })
 
-function Library:PlayTabAnimation(Tab, Showing: boolean, OnComplete: (() -> ())?)
+function Library:PlayTabAnimation(Tab, Showing: boolean, OnComplete: (() -> ())?, PreviousTab: any?)
     if type(Tab) ~= "table" or not Tab.Container then
         if OnComplete then
             OnComplete()
@@ -2494,10 +2658,13 @@ function Library:PlayTabAnimation(Tab, Showing: boolean, OnComplete: (() -> ())?
             Bottom = UDim2.fromOffset(0, Offset),
         }
 
-        if SwipeFrom == "auto" and Library.PreviousTab then
+        PreviousTab = PreviousTab or Library.PreviousTab
+        if SwipeFrom == "auto" and PreviousTab then
             local CurrentOrder = Tab.Button.LayoutOrder
-            local PreviousOrder = Library.PreviousTab.Button.LayoutOrder
-            if CurrentOrder and PreviousOrder then -- this may be unnecessary but oh well
+            local PreviousOrder = PreviousTab.Button.LayoutOrder
+            if CurrentOrder and PreviousOrder and Tab.IsSubTab then
+                StartPosition = CurrentOrder > PreviousOrder and StartingPositions.Right or StartingPositions.Left
+            elseif CurrentOrder and PreviousOrder then -- this may be unnecessary but oh well
                 StartPosition = CurrentOrder > PreviousOrder and StartingPositions.Top or StartingPositions.Bottom -- bigger order means its under the current button
             else
                 StartPosition = StartingPositions.Bottom
@@ -2667,20 +2834,18 @@ function Library:MakeBoxPopOut(Box: any, Options: {
 
         PlaceholderHeader = Header:Clone()
         PlaceholderHeader.Parent = Frame
+        RegisterPopOutClone(Header, PlaceholderHeader)
         DimPopOutClone(PlaceholderHeader)
 
         if PopOutIcon then
-            local PlaceholderDockIcon = New("ImageButton", {
-                AutoButtonColor = false,
+            local PlaceholderDockIcon = Library:CreateIcon(PopOutIcon, {
                 AnchorPoint = Vector2.new(1, 0.5),
-                BackgroundTransparency = 1,
                 ImageColor3 = "WhiteColor",
                 Position = UDim2.new(1, -8, 0.5, 0),
                 Size = UDim2.fromOffset(22, 22),
                 ZIndex = PlaceholderHeader.ZIndex + 1,
                 Parent = Frame,
-            })
-            Library:ApplyLucideIcon(PlaceholderDockIcon, PopOutIcon)
+            }, true)
             PlaceholderDockIcon.MouseButton1Click:Connect(function()
                 Box:SetPoppedOut(false)
             end)
@@ -2701,6 +2866,7 @@ function Library:MakeBoxPopOut(Box: any, Options: {
 
         PlaceholderHeader = Header:Clone()
         PlaceholderHeader.Parent = Placeholder
+        RegisterPopOutClone(Header, PlaceholderHeader)
         DimPopOutClone(PlaceholderHeader)
     end
 
@@ -3132,15 +3298,12 @@ function Library:AddDraggableLabel(...)
             local CustomIcon = Library:GetCustomIcon(Icon)
             assert(CustomIcon, "Icon must be a valid Roblox asset or a valid URL or a valid lucide icon.")
 
-            IconImage = IconImage or New("ImageLabel", {
-                BackgroundTransparency = 1,
+            IconImage = if IconImage then Library:ApplyIcon(IconImage, CustomIcon) else Library:CreateIcon(CustomIcon, {
                 ImageColor3 = "FontColor",
                 Size = UDim2.fromOffset(16, 16),
                 ZIndex = 2,
                 Parent = Label,
             })
-
-            Library:ApplyLucideIcon(IconImage, CustomIcon)
         end
 
         if IconImage then IconImage.Visible = IsNotEmpty end
@@ -3250,28 +3413,18 @@ function Library:AddDraggableButton(...)
     end
     Library:AddOutline(Button)
 
-    local MaxClickDistance = ExcludeDragging and 12 or math.huge
+    local PressPosition
     Button.InputBegan:Connect(function(Input: InputObject)
-        if not IsClickInput(Input) then
+        if IsMouseInput(Input) then
+            PressPosition = Button.AbsolutePosition
+        end
+    end)
+    Button.Activated:Connect(function()
+        if PressPosition and (Button.AbsolutePosition - PressPosition).Magnitude > 10 then
             return
         end
 
-        local StartPos = Input.Position
-        local Changed
-        Changed = Input.Changed:Connect(function()
-            if Input.UserInputState ~= Enum.UserInputState.End then
-                return
-            end
-
-            if (Input.Position - StartPos).Magnitude <= MaxClickDistance then
-                Library:SafeCallback(Func, DraggableButton)
-            end
-
-            if Changed and Changed.Connected then
-                Changed:Disconnect()
-                Changed = nil
-            end
-        end)
+        Library:SafeCallback(Func, DraggableButton)
     end)
 
     function DraggableButton:SetText(Text: string)
@@ -3281,7 +3434,9 @@ function Library:AddDraggableButton(...)
         Button.Size = UDim2.fromOffset(X * 2, Y * 2)
     end
 
-    Library:MakeDraggable(Button, Button, true)
+    if not ExcludeDragging then
+        Library:MakeDraggable(Button, Button, true)
+    end
     DraggableButton:SetText(Text)
     DraggableButton.Button = Button
 
@@ -3337,7 +3492,7 @@ function Library:AddDraggableMenu(Name: string)
     )
     Library:AddOutline(Holder)
 
-    Library:MakeLine(Holder, {
+    local DividerLine = Library:MakeLine(Holder, {
         Position = UDim2.fromOffset(0, 34),
         Size = UDim2.new(1, 0, 0, 1),
     })
@@ -3350,7 +3505,7 @@ function Library:AddDraggableMenu(Name: string)
         TextXAlignment = Enum.TextXAlignment.Left,
         Parent = Holder,
     })
-    New("UIPadding", {
+    local LabelPadding = New("UIPadding", {
         PaddingLeft = UDim.new(0, 12),
         PaddingRight = UDim.new(0, 12),
         Parent = Label,
@@ -3382,7 +3537,7 @@ function Library:AddDraggableMenu(Name: string)
 
     PositionDraggable(Holder, Holder.Position)
 
-    return Holder, Container
+    return Holder, Container, Label, DividerLine, LabelPadding
 end
 
 function Library:AddDraggableImageButton(...)
@@ -3419,8 +3574,7 @@ function Library:AddDraggableImageButton(...)
         Parent = Floats,
     })
 
-    local IconImage = New("ImageLabel", {
-        BackgroundTransparency = 1,
+    local IconImage = Library:CreateIcon(nil, {
         AnchorPoint = Vector2.new(0.5, 0.5),
         Position = UDim2.fromScale(0.5, 0.5),
         Size = UDim2.fromOffset(IconSize, IconSize),
@@ -3446,28 +3600,18 @@ function Library:AddDraggableImageButton(...)
     end
     Library:AddOutline(Button)
 
-    local MaxClickDistance = ExcludeDragging and 12 or math.huge
+    local PressPosition
     Button.InputBegan:Connect(function(Input: InputObject)
-        if not IsClickInput(Input) then
+        if IsMouseInput(Input) then
+            PressPosition = Button.AbsolutePosition
+        end
+    end)
+    Button.Activated:Connect(function()
+        if PressPosition and (Button.AbsolutePosition - PressPosition).Magnitude > 10 then
             return
         end
 
-        local StartPos = Input.Position
-        local Changed
-        Changed = Input.Changed:Connect(function()
-            if Input.UserInputState ~= Enum.UserInputState.End then
-                return
-            end
-
-            if (Input.Position - StartPos).Magnitude <= MaxClickDistance then
-                Library:SafeCallback(Func, DraggableImageButton)
-            end
-
-            if Changed and Changed.Connected then
-                Changed:Disconnect()
-                Changed = nil
-            end
-        end)
+        Library:SafeCallback(Func, DraggableImageButton)
     end)
 
     function DraggableImageButton:SetIcon(NewIcon: string)
@@ -3476,7 +3620,7 @@ function Library:AddDraggableImageButton(...)
         local CustomIcon = Library:GetCustomIcon(Icon)
         assert(CustomIcon, "Icon must be a valid Roblox asset or a valid URL or a valid lucide icon.")
 
-        Library:ApplyLucideIcon(IconImage, CustomIcon)
+        IconImage = Library:ApplyIcon(IconImage, CustomIcon)
     end
 
     function DraggableImageButton:SetIconSize(NewSize: number)
@@ -3485,7 +3629,9 @@ function Library:AddDraggableImageButton(...)
         Button.Size = UDim2.fromOffset(IconSize + 12, IconSize + 12)
     end
 
-    Library:MakeDraggable(Button, Button, true)
+    if not ExcludeDragging then
+        Library:MakeDraggable(Button, Button, true)
+    end
     DraggableImageButton:SetIcon(Icon)
     DraggableImageButton.Button = Button
 
@@ -3516,6 +3662,21 @@ end
 
 --// Context Menu \\--
 local CurrentMenu
+
+local function CloseMenus(Until: any?, ShouldClose: ((Menu: any) -> boolean)?)
+    local Closed = {}
+
+    while CurrentMenu and CurrentMenu ~= Until and not Closed[CurrentMenu] do
+        local Menu = CurrentMenu
+        if ShouldClose and not ShouldClose(Menu) then
+            break
+        end
+
+        Closed[Menu] = true
+        Menu:Close()
+    end
+end
+
 function Library:AddContextMenu(
     Holder: GuiObject,
     Size: UDim2 | () -> (),
@@ -3651,13 +3812,24 @@ function Library:AddContextMenu(
     function Table:Open()
         if CurrentMenu == Table then
             return
-        elseif CurrentMenu then
-            CurrentMenu:Close()
         end
 
+        local NestedParent = nil
+        local Check = CurrentMenu
+        while Check do
+            if Holder:IsDescendantOf(Check.Menu) then
+                NestedParent = Check
+                break
+            end
+            Check = Check.ParentMenu
+        end
+
+        CloseMenus(NestedParent)
+
+        Table.ParentMenu = NestedParent
         CurrentMenu = Table
         Table.Active = true
-        Menu.ZIndex = 1
+        Menu.ZIndex = NestedParent and NestedParent.Menu.ZIndex + 1 or 1
 
         local TargetParent = if ParentGui == Overlay then Overlay else ParentGui
         Menu.Parent = nil
@@ -3736,7 +3908,7 @@ function Library:AddContextMenu(
                 )
             end
 
-            local HolderAllowed = Library:IsInsideFrame(Library.WindowContainer, Holder)
+            local HolderAllowed = Table.ParentMenu ~= nil or Library:IsInsideFrame(Library.WindowContainer, Holder)
             if not HolderAllowed then
                 for _, Surface in Library.DraggableElements do
                     if not (Surface and Library:IsInsideFrame(Surface, Holder)) then
@@ -3765,7 +3937,8 @@ function Library:AddContextMenu(
         end
 
         Table.Active = false
-        CurrentMenu = nil
+        CurrentMenu = Table.ParentMenu
+        Table.ParentMenu = nil
 
         if typeof(ActiveCallback) == "function" then
             Library:SafeCallback(ActiveCallback, false)
@@ -3832,7 +4005,8 @@ function Library:AddContextMenu(
             end
         end
 
-        if CurrentMenu == Table then
+        if Table.Active then
+            CloseMenus(Table)
             Table:Close()
         end
 
@@ -3863,15 +4037,9 @@ Library:GiveSignal(UserInputService.InputBegan:Connect(function(Input: InputObje
     if IsClickInput(Input, true) then
         local Location = Input.Position
 
-        if
-            CurrentMenu
-            and not (
-                Library:MouseIsOverFrame(CurrentMenu.Menu, Location)
-                or Library:MouseIsOverFrame(CurrentMenu.Holder, Location)
-            )
-        then
-            CurrentMenu:Close()
-        end
+        CloseMenus(nil, function(Menu)
+            return not (Library:MouseIsOverFrame(Menu.Menu, Location) or Library:MouseIsOverFrame(Menu.Holder, Location))
+        end)
     end
 end))
 
@@ -3962,7 +4130,7 @@ function Library:AddTooltip(InfoStr: string, DisabledInfoStr: string, HoverInsta
         if
             CurrentHoverInstance == HoverInstance
             or Library.ActiveDialog
-            or (CurrentMenu and Library:MouseIsOverFrame(CurrentMenu.Menu, Mouse))
+            or (CurrentMenu and not HoverInstance:IsDescendantOf(CurrentMenu.Menu) and Library:MouseIsOverFrame(CurrentMenu.Menu, Mouse))
             or (TooltipTable.Disabled and typeof(DisabledInfoStr) ~= "string")
             or (not TooltipTable.Disabled and typeof(InfoStr) ~= "string")
         then
@@ -3989,7 +4157,7 @@ function Library:AddTooltip(InfoStr: string, DisabledInfoStr: string, HoverInsta
             (Library.Toggled or Library.ActiveLoading)
             and not Library.ActiveDialog
             and Library:MouseIsOverFrame(HoverInstance, Mouse)
-            and not (CurrentMenu and Library:MouseIsOverFrame(CurrentMenu.Menu, Mouse))
+            and not (CurrentMenu and not HoverInstance:IsDescendantOf(CurrentMenu.Menu) and Library:MouseIsOverFrame(CurrentMenu.Menu, Mouse))
         do
             TooltipLabel.Position = UDim2.fromOffset(
                 Mouse.X + (Library.ShowCustomCursor and 8 or 14),
@@ -4048,7 +4216,7 @@ function Library:OnUnload(Callback)
     table.insert(Library.UnloadSignals, Callback)
 end
 
-local BaseAddons = {}
+local BaseAddons, BaseGroupbox = {}, {}
 do
     local Funcs = {}
 
@@ -4083,6 +4251,7 @@ do
             Mode = Info.Mode,
             SyncToggleState = Info.SyncToggleState,
 
+            NoUI = Info.NoUI == true,
             MenuVisible = Info.NoUI ~= true,
 
             Callback = Info.Callback,
@@ -4091,6 +4260,7 @@ do
             Clicked = Info.Clicked,
 
             Type = "KeyPicker",
+            Idx = Idx,
         }
 
         if KeyPicker.Mode == "Press" then
@@ -4296,7 +4466,7 @@ do
 
         local Picker = New("TextButton", {
             BackgroundColor3 = "MainColor",
-            Size = UDim2.fromOffset(18, 18),
+            Size = UDim2.fromOffset(21, 21),
             Text = (IsForButton and SlideOverflow) and "" or KeyPicker.Value,
             TextSize = 14,
             TextTransparency = 0.4,
@@ -4312,13 +4482,8 @@ do
                 Position = UDim2.new(0, 0, 0, 0),
                 Text = KeyPicker.Value,
                 TextSize = 14,
-                FontFace = Picker.FontFace,
                 TextXAlignment = Enum.TextXAlignment.Center,
                 Parent = Picker,
-            })
-
-            Library:AddToRegistry(SlidingLabel, {
-                TextColor3 = "FontColor",
             })
         end
 
@@ -4387,7 +4552,7 @@ do
 
             New("UIListLayout", {
                 FillDirection = Enum.FillDirection.Horizontal,
-                Padding = UDim.new(0, 9),
+                Padding = UDim.new(0, 6),
                 Parent = Holder,
             })
 
@@ -4405,11 +4570,27 @@ do
         local KeybindsToggle = { Normal = KeyPicker.Mode ~= "Toggle" }
         do
             local Holder = New("TextButton", {
+                BackgroundColor3 = "MainColor",
                 BackgroundTransparency = 1,
                 Size = UDim2.new(1, 0, 0, 16),
                 Text = "",
                 Visible = not Info.NoUI,
                 Parent = Library.KeybindContainer,
+            })
+            table.insert(
+                Library.Corners,
+                New("UICorner", {
+                    CornerRadius = UDim.new(0, Library.CornerRadius / 2),
+                    Parent = Holder,
+                })
+            )
+            local ButtonStroke = New("UIStroke", {
+                Color = "OutlineColor",
+                Enabled = false,
+                Parent = Holder,
+            })
+            local ButtonPadding = New("UIPadding", {
+                Parent = Holder,
             })
 
             local Label = New("TextLabel", {
@@ -4419,6 +4600,7 @@ do
                 Text = "",
                 TextSize = 14,
                 TextTransparency = 0.5,
+                TextXAlignment = Enum.TextXAlignment.Left,
                 Parent = Holder,
             })
 
@@ -4442,20 +4624,23 @@ do
                 Parent = Checkbox,
             })
 
-            local CheckImage = New("ImageLabel", {
+            local CheckImage = Library:CreateIcon(CheckIcon, {
                 ImageColor3 = "FontColor",
                 ImageTransparency = 1,
                 Position = UDim2.fromOffset(2, 2),
                 Size = UDim2.new(1, -4, 1, -4),
                 Parent = Checkbox,
             })
-            if CheckIcon then
-                Library:ApplyLucideIcon(CheckImage, CheckIcon)
-            end
 
             function KeybindsToggle:Display(State)
+                if KeyPicker.Mode == "Press" then
+                    Label.TextTransparency = 0.4
+                    SetIconProperties(CheckImage, { ImageTransparency = 1 })
+                    return
+                end
+
                 Label.TextTransparency = State and 0 or 0.5
-                CheckImage.ImageTransparency = State and 0 or 1
+                SetIconProperties(CheckImage, { ImageTransparency = State and 0 or 1 })
             end
 
             function KeybindsToggle:SetText(Text)
@@ -4469,13 +4654,29 @@ do
             function KeybindsToggle:SetNormal(Normal)
                 KeybindsToggle.Normal = Normal
 
-                Holder.Active = not Normal
-                Label.Position = Normal and UDim2.fromOffset(0, 0) or UDim2.fromOffset(22, 0)
+                local IsPress = KeyPicker.Mode == "Press"
+                Holder.Active = not Normal or IsPress
                 Checkbox.Visible = not Normal
+                ButtonStroke.Enabled = IsPress
+                Holder.BackgroundTransparency = IsPress and 0 or 1
+                Holder.AutomaticSize = IsPress and Enum.AutomaticSize.X or Enum.AutomaticSize.None
+                Holder.Size = IsPress and UDim2.fromOffset(0, 20) or UDim2.new(1, 0, 0, 16)
+                ButtonPadding.PaddingLeft = UDim.new(0, IsPress and 8 or 0)
+                ButtonPadding.PaddingRight = UDim.new(0, IsPress and 8 or 0)
+
+                Label.AutomaticSize = Enum.AutomaticSize.X
+                Label.Size = UDim2.fromScale(0, 1)
+                Label.TextXAlignment = Enum.TextXAlignment.Left
+                Label.Position = (not IsPress and not Normal) and UDim2.fromOffset(22, 0) or UDim2.fromOffset(0, 0)
             end
 
             KeyPicker.DoClick = function(...) end --// make luau lsp shut up
             table.insert(KeyPicker.Connections, Holder.MouseButton1Click:Connect(function()
+                if KeyPicker.Mode == "Press" then
+                    KeyPicker:DoClick()
+                    return
+                end
+
                 if KeybindsToggle.Normal then
                     return
                 end
@@ -4483,6 +4684,16 @@ do
                 KeyPicker.Toggled = not KeyPicker.Toggled
                 KeyPicker:DoClick()
                 KeyPicker:Update()
+            end))
+            table.insert(KeyPicker.Connections, Holder.MouseEnter:Connect(function()
+                if KeyPicker.Mode == "Press" and not ParentObj.Disabled then
+                    Label.TextTransparency = 0
+                end
+            end))
+            table.insert(KeyPicker.Connections, Holder.MouseLeave:Connect(function()
+                if KeyPicker.Mode == "Press" then
+                    Label.TextTransparency = 0.4
+                end
             end))
 
             KeybindsToggle.Holder = Holder
@@ -4494,7 +4705,7 @@ do
 
         local ModeButtons = {}
         local ModeCorners = {}
-        local TotalModeButtons = GetTableSize(Info.Modes)
+        local TotalModeButtons = GetTableSize(Info.Modes) + 1
         local MenuCornersOnly = if TotalModeButtons == 1 then "no_left" else "no_top_left"
 
         local MenuTable
@@ -4647,6 +4858,48 @@ do
             ModeButtons[Mode] = ModeButton
         end
 
+        do
+            local RemoveButton = New("TextButton", {
+                BackgroundColor3 = "MainColor",
+                BackgroundTransparency = 1,
+                LayoutOrder = TotalModeButtons,
+                Size = UDim2.new(1, 0, 0, IsForButton and 21 or 19),
+                Text = "Remove",
+                TextSize = 14,
+                TextTransparency = 0.5,
+                Parent = MenuTable.Menu,
+            })
+
+            local Corner = New("UICorner", {
+                TopLeftRadius = UDim.new(0, 0),
+                TopRightRadius = UDim.new(0, 0),
+                BottomLeftRadius = UDim.new(0, Library.CornerRadius / 2),
+                BottomRightRadius = UDim.new(0, Library.CornerRadius / 2),
+                Parent = RemoveButton,
+            })
+            table.insert(Library.SpecificCorners, Corner)
+            table.insert(ModeCorners, { Corner = Corner, Style = "last" })
+
+            table.insert(KeyPicker.Connections, RemoveButton.MouseButton1Click:Connect(function()
+                MenuTable:Close()
+                KeyPicker:SetValue({ "None", KeyPicker.Mode, {} })
+            end))
+
+            table.insert(KeyPicker.Connections, RemoveButton.MouseEnter:Connect(function()
+                TweenService:Create(RemoveButton, Library.TweenInfo, {
+                    BackgroundTransparency = 0.7,
+                    TextTransparency = 0.1,
+                }):Play()
+            end))
+
+            table.insert(KeyPicker.Connections, RemoveButton.MouseLeave:Connect(function()
+                TweenService:Create(RemoveButton, Library.TweenInfo, {
+                    BackgroundTransparency = 1,
+                    TextTransparency = 0.5,
+                }):Play()
+            end))
+        end
+
         local SetPickingState = function(State, SkipUpdate: boolean?)
             Picking = State
             Library.IsPicking = State
@@ -4760,7 +5013,7 @@ do
                     ToggleLabel.AbsoluteSize.X / Library.DPIScale
                 )
                 Picker.Text = DisplayText
-                Picker.Size = IsForButton and UDim2.new(0, X + 9, 1, 0) or UDim2.fromOffset((X + 9), (Y + 4))
+                Picker.Size = IsForButton and UDim2.new(0, X + 9, 1, 0) or UDim2.fromOffset(X + 9, 21)
             end
         end
 
@@ -4792,6 +5045,7 @@ do
 
             if KeyPicker.SyncToggleState and ParentObj.Value ~= State then
                 ParentObj:SetValue(State)
+                State = KeyPicker:GetState()
             end
 
             if Info.NoUI then
@@ -4943,8 +5197,14 @@ do
         end
 
         function KeyPicker:SetText(Text)
+            KeyPicker.Text = Text
             KeybindsToggle:SetText(Text)
             KeyPicker:Update()
+
+            local KeybindMenu = Library.KeybindMenu
+            if KeybindMenu and KeybindMenu.SettingsOpen then
+                KeybindMenu:RefreshSettings()
+            end
         end
 
         function KeyPicker:SetMenuVisibility(Visible: boolean)
@@ -4952,6 +5212,11 @@ do
 
             KeyPicker.MenuVisible = Visible
             KeyPicker:Update()
+
+            local KeybindMenu = Library.KeybindMenu
+            if KeybindMenu and KeybindMenu.SettingsOpen then
+                KeybindMenu:RefreshSettings()
+            end
         end
 
         table.insert(KeyPicker.Connections, Picker.MouseButton1Click:Connect(function()
@@ -4965,7 +5230,7 @@ do
                 KeyPicker:Display("...")
             else
                 Picker.Text = "..."
-                Picker.Size = IsForButton and UDim2.new(0, 29, 1, 0) or UDim2.fromOffset(29, 18)
+                Picker.Size = IsForButton and UDim2.new(0, 29, 1, 0) or UDim2.fromOffset(29, 21)
             end
 
             -- Wait for any input --
@@ -5240,9 +5505,19 @@ do
             end
 
             Options[Idx] = nil
+
+            local KeybindMenu = Library.KeybindMenu
+            if KeybindMenu and KeybindMenu.SettingsOpen then
+                KeybindMenu:RefreshSettings()
+            end
         end
 
         Options[Idx] = KeyPicker
+
+        local KeybindMenu = Library.KeybindMenu
+        if KeybindMenu and KeybindMenu.SettingsOpen then
+            KeybindMenu:RefreshSettings()
+        end
 
         return self
     end
@@ -5277,7 +5552,7 @@ do
 
         local Holder = New("TextButton", {
             BackgroundColor3 = ColorPicker.Value,
-            Size = UDim2.fromOffset(18, 18),
+            Size = UDim2.fromOffset(21, 21),
             Text = "",
             Parent = ToggleLabel,
         })
@@ -5622,16 +5897,13 @@ do
                 Text = "",
                 Parent = FooterBackground,
             })
-            local ResizeGrabberIcon = New("ImageLabel", {
+            Library:CreateIcon(ResizeIcon, {
                 ImageColor3 = "FontColor",
                 ImageTransparency = 0.5,
                 Position = UDim2.fromOffset(2, 2),
                 Size = UDim2.new(1, -4, 1, -4),
                 Parent = ResizeGrabber,
             })
-            if ResizeIcon then
-                Library:ApplyLucideIcon(ResizeGrabberIcon, ResizeIcon)
-            end
 
             table.insert(ColorPicker.Connections, ResizeGrabber.InputBegan:Connect(function(Input: InputObject)
                 Library.CantDragForced = true
@@ -6173,13 +6445,285 @@ do
         return self
     end
 
+    function Funcs:AddSettings(Info)
+        if self.Destroyed then return nil end
+
+        local ParentObj = self
+        if ParentObj.Settings and not ParentObj.Settings.Destroyed then
+            return ParentObj.Settings
+        end
+
+        Info = Library:Validate(Info, Templates.Settings)
+
+        local Settings = {
+            Connections = {},
+            Destroyed = false,
+
+            Elements = {},
+            DependencyBoxes = {},
+
+            Width = Info.Width,
+
+            Type = "Settings",
+            Parent = ParentObj,
+        }
+
+        local IsForButton = ParentObj.Type == "Button" or ParentObj.Type == "SubButton"
+        local IsForContainer = ParentObj.Type == "Input" or ParentObj.Type == "Dropdown"
+        local ParentContainer = IsForContainer and ParentObj.Container or nil
+
+        local Gear = New("TextButton", {
+            BackgroundColor3 = "MainColor",
+            Size = UDim2.fromOffset(18, 18),
+            Text = "",
+        })
+
+        New("UIStroke", {
+            Color = "OutlineColor",
+            Parent = Gear,
+        })
+
+        local GearCorner = New("UICorner", {
+            TopLeftRadius = UDim.new(0, Library.CornerRadius / 2),
+            TopRightRadius = UDim.new(0, Library.CornerRadius / 2),
+            BottomRightRadius = UDim.new(0, Library.CornerRadius / 2),
+            BottomLeftRadius = UDim.new(0, Library.CornerRadius / 2),
+            Parent = Gear,
+        }); table.insert(Library.SpecificCorners, GearCorner)
+
+        New("UIPadding", {
+            PaddingBottom = UDim.new(0, 3),
+            PaddingLeft = UDim.new(0, 3),
+            PaddingRight = UDim.new(0, 3),
+            PaddingTop = UDim.new(0, 3),
+            Parent = Gear,
+        })
+
+        local Icon = Library:CreateIcon(SettingsIcon, {
+            ImageColor3 = "FontColor",
+            ImageTransparency = 0.5,
+            Size = UDim2.fromScale(1, 1),
+            Parent = Gear,
+        })
+
+        if IsForButton then
+            New("UIFlexItem", {
+                FlexMode = Enum.UIFlexMode.None,
+                Parent = Gear,
+            })
+
+            Gear.LayoutOrder = ParentObj.Base.LayoutOrder + 1
+            Gear.Size = UDim2.new(0, 21, 1, 0)
+            Gear.Parent = ParentObj.Base.Parent
+        elseif IsForContainer then
+            local Height = ParentContainer.Size.Y.Offset
+            ParentContainer.Size = UDim2.new(1, -(Height + 6), 0, Height)
+
+            Gear.AnchorPoint = Vector2.new(1, 1)
+            Gear.Position = UDim2.fromScale(1, 1)
+            Gear.Size = UDim2.fromOffset(Height, Height)
+            Gear.Parent = ParentObj.Holder
+        else
+            Gear.Size = UDim2.fromOffset(21, 21)
+            Gear.Parent = ParentObj.TextLabel
+        end
+
+        local function GetMenuSize()
+            if typeof(Settings.Width) == "number" then
+                return UDim2.fromOffset(Settings.Width, 0)
+            end
+
+            if not Library.WindowContainer then
+                return UDim2.fromOffset(200, 0)
+            end
+
+            local Width = (Library.WindowContainer.AbsoluteSize.X / Library.DPIScale - 12) / 2 - 7
+            return UDim2.fromOffset(math.floor(Width), 0)
+        end
+
+        local SettingsMenu; SettingsMenu = Library:AddContextMenu(Gear, GetMenuSize, function()
+            return { 0.5, Gear.AbsoluteSize.Y + 1.5 }
+        end, 1, function(Active: boolean)
+            local Half = UDim.new(0, Library.CornerRadius / 2)
+            local Zero = UDim.new(0, 0)
+
+            GearCorner.TopLeftRadius = Half
+            GearCorner.TopRightRadius = Half
+            GearCorner.BottomRightRadius = Active and Zero or Half
+            GearCorner.BottomLeftRadius = Active and Zero or Half
+
+            local MenuCorner = SettingsMenu and SettingsMenu.Corner
+            if MenuCorner then
+                MenuCorner.TopLeftRadius = Zero
+                MenuCorner.TopRightRadius = Half
+                MenuCorner.BottomRightRadius = Half
+                MenuCorner.BottomLeftRadius = Half
+            end
+
+            if ParentObj.Disabled then
+                return
+            end
+
+            SetIconProperties(Icon, { ImageTransparency = Active and 0 or 0.5 })
+        end, false, "no_top_left")
+        Settings.Menu = SettingsMenu
+
+        local Container = New("Frame", {
+            AutomaticSize = Enum.AutomaticSize.Y,
+            BackgroundTransparency = 1,
+            Size = UDim2.fromScale(1, 0),
+            Parent = SettingsMenu.Menu,
+        })
+        New("UIListLayout", {
+            Padding = UDim.new(0, 8),
+            Parent = Container,
+        })
+        New("UIPadding", {
+            PaddingBottom = UDim.new(0, 7),
+            PaddingLeft = UDim.new(0, 7),
+            PaddingRight = UDim.new(0, 7),
+            PaddingTop = UDim.new(0, 7),
+            Parent = Container,
+        })
+
+        Settings.Holder = Container
+        Settings.Container = Container
+        Settings.Gear = Gear
+
+        function Settings:Resize() end
+
+        function Settings:SetWidth(Width: number?)
+            if Width ~= nil then
+                assert(typeof(Width) == "number", "Width must be a number or nil")
+                assert(Width >= 0, "Width must be higher than 0")
+            end
+
+            Settings.Width = Width
+            SettingsMenu:SetSize(GetMenuSize)
+        end
+
+        function Settings:Open()
+            if ParentObj.Disabled then
+                return
+            end
+
+            SettingsMenu:Open()
+        end
+
+        function Settings:Close()
+            if not SettingsMenu.Active then
+                return
+            end
+
+            CloseMenus(SettingsMenu)
+
+            SettingsMenu:Close()
+        end
+
+        function Settings:Toggle()
+            if SettingsMenu.Active then
+                Settings:Close()
+            else
+                Settings:Open()
+            end
+        end
+
+        function Settings:Update()
+            local Disabled = ParentObj.Disabled == true
+
+            Gear.Active = not Disabled
+            Gear.BackgroundColor3 = Disabled and Library.Scheme.BackgroundColor or Library.Scheme.MainColor
+            Library.Registry[Gear].BackgroundColor3 = Disabled and "BackgroundColor" or "MainColor"
+            SetIconProperties(Icon, { ImageTransparency = Disabled and 0.8 or (SettingsMenu.Active and 0 or 0.5) })
+
+            if Disabled then
+                Settings:Close()
+            end
+        end
+
+        table.insert(Settings.Connections, Gear.MouseButton1Click:Connect(function()
+            Settings:Toggle()
+        end))
+
+        table.insert(Settings.Connections, Gear.MouseEnter:Connect(function()
+            if ParentObj.Disabled then
+                return
+            end
+
+            TweenIcon(Icon, { ImageTransparency = 0 })
+        end))
+
+        table.insert(Settings.Connections, Gear.MouseLeave:Connect(function()
+            if ParentObj.Disabled then
+                return
+            end
+
+            TweenIcon(Icon, { ImageTransparency = SettingsMenu.Active and 0 or 0.5 })
+        end))
+
+        setmetatable(Settings, BaseGroupbox)
+
+        function Settings:Destroy()
+            Settings.Destroyed = true
+
+            for _, Connection in Settings.Connections do
+                Connection:Disconnect()
+            end
+
+            for Index = #Settings.Elements, 1, -1 do
+                local Element = Settings.Elements[Index]
+                if Element and Element.Destroy then
+                    Element:Destroy()
+                end
+            end
+
+            for Index = #Settings.DependencyBoxes, 1, -1 do
+                local SubDepbox = Settings.DependencyBoxes[Index]
+                if SubDepbox and SubDepbox.Destroy then
+                    SubDepbox:Destroy()
+                end
+            end
+
+            SettingsMenu:Destroy()
+
+            if ParentContainer and ParentContainer.Parent then
+                ParentContainer.Size = UDim2.new(1, 0, 0, ParentContainer.Size.Y.Offset)
+            end
+
+            if Gear then
+                Gear:Destroy()
+            end
+
+            if ParentObj.Addons then
+                local AddonIdx = table.find(ParentObj.Addons, Settings)
+                if AddonIdx then
+                    table.remove(ParentObj.Addons, AddonIdx)
+                end
+            end
+
+            if ParentObj.Settings == Settings then
+                ParentObj.Settings = nil
+            end
+        end
+
+        if not ParentObj.Addons then
+            ParentObj.Addons = {}
+        end
+
+        table.insert(ParentObj.Addons, Settings)
+        ParentObj.Settings = Settings
+
+        Settings:Update()
+
+        return Settings
+    end
+
     BaseAddons.__index = Funcs
     BaseAddons.__namecall = function(_, Key, ...)
         return Funcs[Key](...)
     end
 end
 
-local BaseGroupbox = {}
 do
     local Funcs = {}
 
@@ -6224,7 +6768,7 @@ do
             local TextLabel = New("TextLabel", {
                 AutomaticSize = Enum.AutomaticSize.X,
                 BackgroundTransparency = 1,
-                Size = UDim2.fromScale(1, 0),
+                Size = UDim2.fromScale(1, 1),
                 Text = Text,
                 TextSize = 14,
                 TextTransparency = 0.5,
@@ -6409,6 +6953,7 @@ do
             New("UIListLayout", {
                 FillDirection = Enum.FillDirection.Horizontal,
                 HorizontalAlignment = Enum.HorizontalAlignment.Right,
+                VerticalAlignment = Enum.VerticalAlignment.Center,
                 Padding = UDim.new(0, 6),
                 Parent = TextLabel,
             })
@@ -6489,6 +7034,7 @@ do
                 Info.Text = Params.Text or ""
                 Info.Func = Params.Func or Params.Callback or function() end
                 Info.DoubleClick = Params.DoubleClick
+                Info.Icon = Params.Icon or Params.IconName
 
                 Info.Tooltip = Params.Tooltip
                 Info.DisabledTooltip = Params.DisabledTooltip
@@ -6501,6 +7047,7 @@ do
                 Info.Text = First or ""
                 Info.Func = Second or function() end
                 Info.DoubleClick = false
+                Info.Icon = nil
 
                 Info.Tooltip = nil
                 Info.DisabledTooltip = nil
@@ -6525,6 +7072,7 @@ do
             Text = Info.Text,
             Func = Info.Func,
             DoubleClick = Info.DoubleClick,
+            Icon = Info.Icon,
 
             Tooltip = Info.Tooltip,
             DisabledTooltip = Info.DisabledTooltip,
@@ -6533,6 +7081,15 @@ do
             Risky = Info.Risky,
             Disabled = Info.Disabled,
             Visible = Info.Visible,
+            Locked = false,
+
+            Base = nil,
+            Stroke = nil,
+            Content = nil,
+            Label = nil,
+            IconImage = nil,
+
+            Addons = {},
 
             Tween = nil,
             Type = "Button",
@@ -6549,18 +7106,41 @@ do
         New("UIListLayout", {
             FillDirection = Enum.FillDirection.Horizontal,
             HorizontalFlex = Enum.UIFlexAlignment.Fill,
-            Padding = UDim.new(0, 9),
+            Padding = UDim.new(0, 6),
             Parent = Holder,
         })
+
+        local function ApplyButtonIcon(Button, IconName)
+            local Content = Button.Content
+            if not Content then
+                return
+            end
+
+            local ParsedIcon = Library:GetCustomIcon(IconName)
+            if ParsedIcon then
+                Button.IconImage = if Button.IconImage then Library:ApplyIcon(Button.IconImage, ParsedIcon) else Library:CreateIcon(ParsedIcon, {
+                    LayoutOrder = 0,
+                    Size = UDim2.fromOffset(14, 14),
+                    Parent = Content,
+                })
+
+                Button.IconImage.Visible = true
+                SetIconProperties(Button.IconImage, {
+                    ImageColor3 = if Button.Risky then "RedColor" elseif ParsedIcon.Custom then "WhiteColor" else "FontColor",
+                    ImageTransparency = Button.Disabled and 0.8 or 0.4,
+                })
+            elseif Button.IconImage then
+                Button.IconImage.Visible = false
+            end
+        end
 
         local function CreateButton(Button)
             local Base = New("TextButton", {
                 Active = not Button.Disabled,
                 BackgroundColor3 = Button.Disabled and "BackgroundColor" or "MainColor",
+                LayoutOrder = Button.Type == "SubButton" and 2 or 0,
                 Size = UDim2.fromScale(1, 1),
-                Text = Button.Text,
-                TextSize = 14,
-                TextTransparency = 0.4,
+                Text = "",
                 Visible = Button.Visible,
                 Parent = Holder,
             })
@@ -6579,6 +7159,47 @@ do
                 })
             )
 
+            local Content = New("Frame", {
+                AnchorPoint = Vector2.new(0.5, 0.5),
+                AutomaticSize = Enum.AutomaticSize.X,
+                BackgroundTransparency = 1,
+                Position = UDim2.fromScale(0.5, 0.5),
+                Size = UDim2.fromOffset(0, 16),
+                Parent = Base,
+            })
+            New("UIListLayout", {
+                FillDirection = Enum.FillDirection.Horizontal,
+                HorizontalAlignment = Enum.HorizontalAlignment.Center,
+                VerticalAlignment = Enum.VerticalAlignment.Center,
+                Padding = UDim.new(0, 6),
+                Parent = Content,
+            })
+            New("UIPadding", {
+                PaddingLeft = UDim.new(0, 8),
+                PaddingRight = UDim.new(0, 8),
+                Parent = Content,
+            })
+
+            Button.Content = Content
+            Button.Label = New("TextLabel", {
+                AutomaticSize = Enum.AutomaticSize.X,
+                BackgroundTransparency = 1,
+                LayoutOrder = 1,
+                Size = UDim2.fromOffset(0, 16),
+                Text = Button.Text,
+                TextSize = 14,
+                TextTransparency = Button.Disabled and 0.8 or 0.4,
+                Visible = Button.Text ~= "",
+                Parent = Content,
+            })
+
+            if Button.Risky then
+                Button.Label.TextColor3 = Library.Scheme.RedColor
+                Library.Registry[Button.Label].TextColor3 = "RedColor"
+            end
+
+            ApplyButtonIcon(Button, Button.Icon)
+
             return Base, Stroke
         end
 
@@ -6588,20 +7209,28 @@ do
                     return
                 end
 
-                Button.Tween = TweenService:Create(Button.Base, Library.TweenInfo, {
+                Button.Tween = TweenService:Create(Button.Label, Library.TweenInfo, {
                     TextTransparency = 0,
                 })
                 Button.Tween:Play()
+
+                if Button.IconImage and Button.IconImage.Visible then
+                    TweenIcon(Button.IconImage, { ImageTransparency = 0 })
+                end
             end))
             table.insert(Button.Connections, Button.Base.MouseLeave:Connect(function()
                 if Button.Disabled then
                     return
                 end
 
-                Button.Tween = TweenService:Create(Button.Base, Library.TweenInfo, {
+                Button.Tween = TweenService:Create(Button.Label, Library.TweenInfo, {
                     TextTransparency = 0.4,
                 })
                 Button.Tween:Play()
+
+                if Button.IconImage and Button.IconImage.Visible then
+                    TweenIcon(Button.IconImage, { ImageTransparency = 0.4 })
+                end
             end))
 
             table.insert(Button.Connections, Button.Base.MouseButton1Click:Connect(function()
@@ -6612,21 +7241,33 @@ do
                 if Button.DoubleClick then
                     Button.Locked = true
 
-                    Button.Base.Text = "Are you sure?"
-                    Button.Base.TextColor3 = Library.Scheme.AccentColor
-                    Library.Registry[Button.Base].TextColor3 = "AccentColor"
+                    local IconWasVisible = false
+                    if Button.IconImage then
+                        IconWasVisible = Button.IconImage.Visible
+                        Button.IconImage.Visible = false
+                    end
+
+                    Button.Label.Text = "Are you sure?"
+                    Button.Label.Visible = true
+                    Button.Label.TextColor3 = Library.Scheme.AccentColor
+                    Library.Registry[Button.Label].TextColor3 = "AccentColor"
 
                     local Clicked = WaitForEvent(Button.Base.MouseButton1Click, 0.5)
 
-                    Button.Base.Text = Button.Text
-                    Button.Base.TextColor3 = Button.Risky and Library.Scheme.RedColor or Library.Scheme.FontColor
-                    Library.Registry[Button.Base].TextColor3 = Button.Risky and "RedColor" or "FontColor"
+                    Button.Label.Text = Button.Text
+                    Button.Label.Visible = Button.Text ~= ""
+                    Button.Label.TextColor3 = Button.Risky and Library.Scheme.RedColor or Library.Scheme.FontColor
+                    Library.Registry[Button.Label].TextColor3 = Button.Risky and "RedColor" or "FontColor"
+
+                    if Button.IconImage then
+                        Button.IconImage.Visible = IconWasVisible
+                    end
 
                     if Clicked then
                         Library:SafeCallback(Button.Func)
                     end
 
-                    RunService.RenderStepped:Wait() --// Mouse Button fires without waiting (i hate roblox)
+                    RunService.RenderStepped:Wait()
                     Button.Locked = false
                     return
                 end
@@ -6648,6 +7289,7 @@ do
                 Text = Info.Text,
                 Func = Info.Func,
                 DoubleClick = Info.DoubleClick,
+                Icon = Info.Icon,
 
                 Tooltip = Info.Tooltip,
                 DisabledTooltip = Info.DisabledTooltip,
@@ -6656,6 +7298,15 @@ do
                 Risky = Info.Risky,
                 Disabled = Info.Disabled,
                 Visible = Info.Visible,
+                Locked = false,
+
+                Base = nil,
+                Stroke = nil,
+                Content = nil,
+                Label = nil,
+                IconImage = nil,
+
+                Addons = {},
 
                 Tween = nil,
                 Type = "SubButton",
@@ -6672,10 +7323,13 @@ do
 
                 StopTween(SubButton.Tween)
 
-                SubButton.Base.BackgroundColor3 = SubButton.Disabled and Library.Scheme.BackgroundColor
-                    or Library.Scheme.MainColor
-                SubButton.Base.TextTransparency = SubButton.Disabled and 0.8 or 0.4
+                SubButton.Base.BackgroundColor3 = SubButton.Disabled and Library.Scheme.BackgroundColor or Library.Scheme.MainColor
+                SubButton.Label.TextTransparency = SubButton.Disabled and 0.8 or 0.4
                 SubButton.Stroke.Transparency = SubButton.Disabled and 0.5 or 0
+
+                if SubButton.IconImage and SubButton.IconImage.Visible then
+                    SetIconProperties(SubButton.IconImage, { ImageTransparency = SubButton.Disabled and 0.8 or 0.4 })
+                end
 
                 Library.Registry[SubButton.Base].BackgroundColor3 = SubButton.Disabled and "BackgroundColor"
                     or "MainColor"
@@ -6702,18 +7356,19 @@ do
 
             function SubButton:SetText(Text: string)
                 SubButton.Text = Text
-                SubButton.Base.Text = Text
+                SubButton.Label.Text = Text
+                SubButton.Label.Visible = Text ~= ""
+            end
+
+            function SubButton:SetIcon(Icon: string?)
+                SubButton.Icon = Icon
+                ApplyButtonIcon(SubButton, Icon)
             end
 
             if typeof(SubButton.Tooltip) == "string" or typeof(SubButton.DisabledTooltip) == "string" then
                 SubButton.TooltipTable =
                     Library:AddTooltip(SubButton.Tooltip, SubButton.DisabledTooltip, SubButton.Base)
                 SubButton.TooltipTable.Disabled = SubButton.Disabled
-            end
-
-            if SubButton.Risky then
-                SubButton.Base.TextColor3 = Library.Scheme.RedColor
-                Library.Registry[SubButton.Base].TextColor3 = "RedColor"
             end
 
             SubButton:UpdateColors()
@@ -6725,6 +7380,7 @@ do
             end
 
             SubButton.AddKeyPicker = BaseAddons.__index.AddKeyPicker
+            SubButton.AddSettings = BaseAddons.__index.AddSettings
 
             function SubButton:Destroy()
                 SubButton.Destroyed = true
@@ -6732,6 +7388,15 @@ do
                 if SubButton.Connections then
                     for _, Connection in SubButton.Connections do
                         Connection:Disconnect()
+                    end
+                end
+
+                if SubButton.Addons then
+                    for Index = #SubButton.Addons, 1, -1 do
+                        local Addon = table.remove(SubButton.Addons, Index)
+                        if Addon and Addon.Destroy then
+                            Addon:Destroy()
+                        end
                     end
                 end
 
@@ -6768,10 +7433,13 @@ do
 
             StopTween(Button.Tween)
 
-            Button.Base.BackgroundColor3 = Button.Disabled and Library.Scheme.BackgroundColor
-                or Library.Scheme.MainColor
-            Button.Base.TextTransparency = Button.Disabled and 0.8 or 0.4
+            Button.Base.BackgroundColor3 = Button.Disabled and Library.Scheme.BackgroundColor or Library.Scheme.MainColor
+            Button.Label.TextTransparency = Button.Disabled and 0.8 or 0.4
             Button.Stroke.Transparency = Button.Disabled and 0.5 or 0
+
+            if Button.IconImage and Button.IconImage.Visible then
+                SetIconProperties(Button.IconImage, { ImageTransparency = Button.Disabled and 0.8 or 0.4 })
+            end
 
             Library.Registry[Button.Base].BackgroundColor3 = Button.Disabled and "BackgroundColor" or "MainColor"
         end
@@ -6797,17 +7465,18 @@ do
 
         function Button:SetText(Text: string)
             Button.Text = Text
-            Button.Base.Text = Text
+            Button.Label.Text = Text
+            Button.Label.Visible = Text ~= ""
+        end
+
+        function Button:SetIcon(Icon: string?)
+            Button.Icon = Icon
+            ApplyButtonIcon(Button, Icon)
         end
 
         if typeof(Button.Tooltip) == "string" or typeof(Button.DisabledTooltip) == "string" then
             Button.TooltipTable = Library:AddTooltip(Button.Tooltip, Button.DisabledTooltip, Button.Base)
             Button.TooltipTable.Disabled = Button.Disabled
-        end
-
-        if Button.Risky then
-            Button.Base.TextColor3 = Library.Scheme.RedColor
-            Library.Registry[Button.Base].TextColor3 = "RedColor"
         end
 
         Button:UpdateColors()
@@ -6823,6 +7492,7 @@ do
         end
 
         Button.AddKeyPicker = BaseAddons.__index.AddKeyPicker
+        Button.AddSettings = BaseAddons.__index.AddSettings
 
         function Button:Destroy()
             Button.Destroyed = true
@@ -6830,6 +7500,15 @@ do
             if Button.Connections then
                 for _, Connection in Button.Connections do
                     Connection:Disconnect()
+                end
+            end
+
+            if Button.Addons then
+                for Index = #Button.Addons, 1, -1 do
+                    local Addon = table.remove(Button.Addons, Index)
+                    if Addon and Addon.Destroy then
+                        Addon:Destroy()
+                    end
                 end
             end
 
@@ -6928,6 +7607,7 @@ do
         New("UIListLayout", {
             FillDirection = Enum.FillDirection.Horizontal,
             HorizontalAlignment = Enum.HorizontalAlignment.Right,
+            VerticalAlignment = Enum.VerticalAlignment.Center,
             Padding = UDim.new(0, 6),
             Parent = Label,
         })
@@ -6951,16 +7631,13 @@ do
             Parent = Checkbox,
         })
 
-        local CheckImage = New("ImageLabel", {
+        local CheckImage = Library:CreateIcon(CheckIcon, {
             ImageColor3 = "FontColor",
             ImageTransparency = 1,
             Position = UDim2.fromOffset(2, 2),
             Size = UDim2.new(1, -4, 1, -4),
             Parent = Checkbox,
         })
-        if CheckIcon then
-            Library:ApplyLucideIcon(CheckImage, CheckIcon)
-        end
 
         function Toggle:UpdateColors()
             Toggle:Display()
@@ -6975,7 +7652,7 @@ do
 
             if Toggle.Disabled then
                 Label.TextTransparency = 0.8
-                CheckImage.ImageTransparency = Toggle.Value and 0.8 or 1
+                SetIconProperties(CheckImage, { ImageTransparency = Toggle.Value and 0.8 or 1 })
 
                 Checkbox.BackgroundColor3 = Library.Scheme.BackgroundColor
                 Library.Registry[Checkbox].BackgroundColor3 = "BackgroundColor"
@@ -6986,9 +7663,7 @@ do
             TweenService:Create(Label, Library.TweenInfo, {
                 TextTransparency = Toggle.Value and 0 or 0.4,
             }):Play()
-            TweenService:Create(CheckImage, Library.TweenInfo, {
-                ImageTransparency = Toggle.Value and 0 or 1,
-            }):Play()
+            TweenIcon(CheckImage, { ImageTransparency = Toggle.Value and 0 or 1 })
 
             Checkbox.BackgroundColor3 = Library.Scheme.MainColor
             Library.Registry[Checkbox].BackgroundColor3 = "MainColor"
@@ -7174,7 +7849,7 @@ do
 
         local Label = New("TextLabel", {
             BackgroundTransparency = 1,
-            Size = UDim2.new(1, -40, 1, 0),
+            Size = UDim2.new(1, -38, 1, 0),
             Text = Toggle.Text,
             TextSize = 14,
             TextTransparency = 0.4,
@@ -7185,6 +7860,7 @@ do
         New("UIListLayout", {
             FillDirection = Enum.FillDirection.Horizontal,
             HorizontalAlignment = Enum.HorizontalAlignment.Right,
+            VerticalAlignment = Enum.VerticalAlignment.Center,
             Padding = UDim.new(0, 6),
             Parent = Label,
         })
@@ -7436,6 +8112,12 @@ do
             Disabled = Info.Disabled,
             Visible = Info.Visible,
 
+            Addons = {},
+
+            Holder = nil,
+            Label = nil,
+            Container = nil,
+
             Type = "Input",
         }
 
@@ -7551,6 +8233,8 @@ do
             Box.ClearTextOnFocus = not Input.Disabled and Input.ClearTextOnFocus
             Box.TextEditable = not Input.Disabled
             Input:UpdateColors()
+
+            Library:UpdateAddons(Input)
         end
 
         function Input:SetVisible(Visible: boolean)
@@ -7615,6 +8299,10 @@ do
         Groupbox:Resize()
 
         Input.Holder = Holder
+        Input.Label = Label
+        Input.Container = Box
+
+        Input.AddSettings = BaseAddons.__index.AddSettings
         table.insert(Groupbox.Elements, Input)
 
         Input.Default = Input.Value
@@ -7632,6 +8320,15 @@ do
             if Input.Connections then
                 for _, Connection in Input.Connections do
                     Connection:Disconnect()
+                end
+            end
+
+            if Input.Addons then
+                for Index = #Input.Addons, 1, -1 do
+                    local Addon = table.remove(Input.Addons, Index)
+                    if Addon and Addon.Destroy then
+                        Addon:Destroy()
+                    end
                 end
             end
 
@@ -7738,13 +8435,12 @@ do
         })
         New("UIStroke", {
             ApplyStrokeMode = Enum.ApplyStrokeMode.Contextual,
-            Color = "DarkColor",
+            Color = GetTextStrokeColor,
             LineJoinMode = Enum.LineJoinMode.Miter,
             Parent = DisplayLabel,
         })
 
         local InputTextBox
-        local InputTextBoxStroke
         if Info.AllowRightClickInput then
             InputTextBox = New("TextBox", {
                 BackgroundTransparency = 1,
@@ -7756,9 +8452,9 @@ do
                 ClearTextOnFocus = false,
                 Parent = Bar,
             })
-            InputTextBoxStroke = New("UIStroke", {
+            New("UIStroke", {
                 ApplyStrokeMode = Enum.ApplyStrokeMode.Contextual,
-                Color = "DarkColor",
+                Color = GetTextStrokeColor,
                 LineJoinMode = Enum.LineJoinMode.Miter,
                 Parent = InputTextBox,
             })
@@ -7944,14 +8640,6 @@ do
                     end
 
                     LastValidText = Text
-
-                    if AsNum then
-                        if AsNum > Slider.Max then
-                            InputTextBox.Text = tostring(Slider.Max)
-                        elseif AsNum < Slider.Min then
-                            InputTextBox.Text = tostring(Slider.Min)
-                        end
-                    end
                 end
             end))
 
@@ -7966,28 +8654,6 @@ do
 
                 Num = Round(Num, Slider.Rounding)
                 Slider:SetValue(Num)
-            end))
-
-            table.insert(Slider.Connections, InputTextBox.Focused:Connect(function()
-                if Slider.Disabled then
-                    return
-                end
-
-                Library.Registry[InputTextBoxStroke].Color = "AccentColor"
-                TweenService:Create(InputTextBoxStroke, Library.TweenInfo, {
-                    Color = Library.Scheme.AccentColor,
-                }):Play()
-            end))
-
-            table.insert(Slider.Connections, InputTextBox.FocusLost:Connect(function()
-                if Slider.Disabled then
-                    return
-                end
-
-                Library.Registry[InputTextBoxStroke].Color = "DarkColor"
-                TweenService:Create(InputTextBoxStroke, Library.TweenInfo, {
-                    Color = Library.Scheme.DarkColor,
-                }):Play()
             end))
         end
 
@@ -8109,6 +8775,8 @@ do
         if self.Destroyed then return nil end
 
         Info = Library:Validate(Info, Templates.Dropdown)
+        Info.FormatDisplayValue = Info.FormatDisplayValue or Info.FormatValue
+        Info.FormatListValue = Info.FormatListValue or Info.FormatValue
 
         local Groupbox = self
         local Container = Groupbox.Container
@@ -8149,6 +8817,12 @@ do
 
             Disabled = Info.Disabled,
             Visible = Info.Visible,
+
+            Addons = {},
+
+            Holder = nil,
+            Label = nil,
+            Container = nil,
 
             Type = "Dropdown",
         }
@@ -8201,11 +8875,9 @@ do
             Parent = DisplayContainer,
         }); table.insert(Library.SpecificCorners, DropdownCorner)
 
-        local DisplayImage = New("ImageLabel", {
-            BackgroundTransparency = 1,
+        local DisplayImage = Library:CreateIcon(nil, {
             Position = UDim2.fromOffset(-4, 3),
             Size = UDim2.fromOffset(16, 16),
-            Image = "",
             ImageTransparency = 1,
             ZIndex = 2,
             Parent = DisplayContainer,
@@ -8222,7 +8894,7 @@ do
             Parent = DisplayContainer,
         })
 
-        local ArrowImage = New("ImageLabel", {
+        local ArrowImage = Library:CreateIcon(ArrowIcon, {
             AnchorPoint = Vector2.new(1, 0.5),
             ImageColor3 = "FontColor",
             ImageTransparency = 0.5,
@@ -8230,9 +8902,6 @@ do
             Size = UDim2.fromOffset(16, 16),
             Parent = DisplayContainer,
         })
-        if ArrowIcon then
-            Library:ApplyLucideIcon(ArrowImage, ArrowIcon)
-        end
 
         local SearchBox
         if Info.Searchable then
@@ -8310,8 +8979,7 @@ do
             function(Active: boolean)
                 DisplayButton.TextTransparency = (Active and SearchBox) and 1 or 0
 
-                ArrowImage.ImageTransparency = Active and 0 or 0.5
-                ArrowImage.Rotation = Active and 180 or 0
+                SetIconProperties(ArrowImage, { ImageTransparency = Active and 0 or 0.5, Rotation = Active and 180 or 0 })
 
                 if SearchBox then
                     SearchBox.Text = ""
@@ -8344,6 +9012,35 @@ do
         local PoolSize = math.max(1, Info.MaxVisibleDropdownItems + 2)
         local Pool = {}
         local FilteredEntries = {}
+        local TextWidths = {}
+
+        local function GetListWidth()
+            local Width = DisplayContainer.AbsoluteSize.X / Library.DPIScale
+            if not Info.AutoWidth then
+                return Width
+            end
+
+            for _, Entry in FilteredEntries do
+                local TextWidth = TextWidths[Entry.FormattedValue]
+                if not TextWidth then
+                    TextWidth = Library:GetTextBounds(Entry.FormattedValue, Library.Scheme.Font, 14)
+                    TextWidths[Entry.FormattedValue] = TextWidth
+                end
+
+                local Extra = 16
+                if Entry.ValueImage then
+                    Extra += 18
+                end
+
+                if Entry.IsDivider and Entry.Title then
+                    Extra += 40
+                end
+
+                Width = math.max(Width, TextWidth + Extra)
+            end
+
+            return math.ceil(Width)
+        end
 
         function Dropdown:RecalculateListSize(Count)
             local ItemCount = Count or #FilteredEntries
@@ -8352,7 +9049,7 @@ do
             MenuTable.Menu.CanvasSize = UDim2.fromOffset(0, ItemCount * ItemHeight)
 
             MenuTable:SetSize(function()
-                return UDim2.fromOffset((DisplayContainer.AbsoluteSize.X / Library.DPIScale), Y)
+                return UDim2.fromOffset(GetListWidth(), Y)
             end)
         end
 
@@ -8363,8 +9060,8 @@ do
 
             Label.TextTransparency = Dropdown.Disabled and 0.8 or 0
             DisplayButton.TextTransparency = Dropdown.Disabled and 0.8 or 0
-            DisplayImage.ImageTransparency = Dropdown.Disabled and 0.8 or 0
-            ArrowImage.ImageTransparency = Dropdown.Disabled and 0.8 or MenuTable.Active and 0 or 0.5
+            SetIconProperties(DisplayImage, { ImageTransparency = Dropdown.Disabled and 0.8 or 0 })
+            SetIconProperties(ArrowImage, { ImageTransparency = Dropdown.Disabled and 0.8 or MenuTable.Active and 0 or 0.5 })
         end
 
         function Dropdown:Display()
@@ -8380,7 +9077,7 @@ do
                 for Key, RawValue in Dropdown.Values do
                     local Value = IsDictionary and Key or RawValue
 
-                    if Dropdown.Value[Value] then
+                    if not IsDropdownDivider(RawValue) and Dropdown.Value[Value] then
                         if not ValueImage then
                             ValueImage = GetValueImage(Value, RawValue)
                         end
@@ -8406,19 +9103,15 @@ do
                 end
             end
 
-            if #Str > 25 then
-                Str = Str:sub(1, 22) .. "..."
+            local PlainStr = Str:gsub("<[^>]*>", "")
+            if utf8.len(PlainStr) and utf8.len(PlainStr) > 25 then
+                Str = PlainStr:sub(1, utf8.offset(PlainStr, 23) - 1) .. "..."
             end
 
             DisplayButton.Text = (Str == "" and "---" or Str)
 
-            if ValueImage then
-                Library:ApplyLucideIcon(DisplayImage, ValueImage)
-                DisplayImage.ImageTransparency = 0
-            else
-                DisplayImage.Image = ""
-                DisplayImage.ImageTransparency = 1
-            end
+            DisplayImage = Library:ApplyIcon(DisplayImage, ValueImage)
+            SetIconProperties(DisplayImage, { ImageTransparency = if ValueImage then 0 else 1 })
 
             DisplayButton.Size = ValueImage and UDim2.new(1, -8, 0, 21) or UDim2.new(1, 0, 0, 21)
             DisplayButton.Position = ValueImage and UDim2.fromOffset(14, 0) or UDim2.fromOffset(0, 0)
@@ -8460,20 +9153,48 @@ do
 
             --// Fuzzy-match dropdown values the same way the sidebar search
             --// does, so e.g. "clr" can find "Clear Inventory" in a list \\--
-            local SearchQuery = SearchBox and NormalizeSearch(SearchBox.Text:lower()) or ""
+            local SearchQuery = SearchBox and NormalizeSearch(LowerText(SearchBox.Text)) or ""
             local IsSearching = SearchQuery ~= ""
 
-            local EnabledList, DisabledList = {}, {}
-            local Pending = {}
+            local Keys = {}
+            for Key in Values do
+                table.insert(Keys, Key)
+            end
 
-            for Key, RawValue in Values do
+            if not IsDictionary then
+                table.sort(Keys)
+            end
+
+            local Groups = { { Items = {} } }
+            local Count = 0
+
+            for _, Key in Keys do
+                local RawValue = Values[Key]
+
+                if IsDropdownDivider(RawValue) then
+                    if not IsDictionary then
+                        local Title = RawValue.Title and tostring(RawValue.Title) or nil
+
+                        table.insert(Groups, {
+                            Divider = {
+                                IsDivider = true,
+                                Title = Title,
+                                FormattedValue = Title or "",
+                            },
+                            Items = {},
+                        })
+                    end
+
+                    continue
+                end
+
                 local Value = IsDictionary and Key or RawValue
 
                 local FormattedValue = tostring(Info.FormatListValue and Info.FormatListValue(RawValue) or RawValue)
 
                 local MatchScore = 0
                 if IsSearching then
-                    local Matched, Score = FuzzyScore(FormattedValue:lower(), SearchQuery)
+                    local Matched, Score = FuzzyScore(LowerText((FormattedValue:gsub("<[^>]*>", ""))), SearchQuery)
                     if not Matched then
                         continue
                     end
@@ -8489,50 +9210,55 @@ do
                     FormattedValue = FormattedValue,
                     IsDisabled = IsDisabled,
                     ValueImage = GetValueImage(Value, RawValue),
-                    SortKey = Key,
                     MatchScore = MatchScore,
-                    Order = #Pending + 1,
+                    Order = Count + 1,
                 }
 
-                table.insert(Pending, Entry)
-            end
-
-            if IsSearching then
-                --// Best matches first; ties fall back to original order \\--
-                table.sort(Pending, function(A, B)
-                    if A.MatchScore ~= B.MatchScore then
-                        return A.MatchScore > B.MatchScore
-                    end
-                    return A.Order < B.Order
-                end)
-            elseif not IsDictionary then
-                table.sort(Pending, function(A, B)
-                    return A.SortKey < B.SortKey
-                end)
+                Count += 1
+                table.insert(Groups[#Groups].Items, Entry)
             end
 
             table.clear(FilteredEntries)
 
-            if Dropdown.KeepDisabledValuePosition then
-                for _, Entry in Pending do
-                    table.insert(FilteredEntries, Entry)
-                end
-                return
-            end
+            for _, Group in Groups do
+                local Items = Group.Items
+                if IsSearching then
+                    if #Items == 0 then
+                        continue
+                    end
 
-            for _, Entry in Pending do
-                if Entry.IsDisabled then
-                    table.insert(DisabledList, Entry)
-                else
-                    table.insert(EnabledList, Entry)
+                    --// Best matches first; ties fall back to original order \\--
+                    table.sort(Items, function(A, B)
+                        if A.MatchScore ~= B.MatchScore then
+                            return A.MatchScore > B.MatchScore
+                        end
+                        return A.Order < B.Order
+                    end)
                 end
-            end
 
-            for _, Entry in EnabledList do
-                table.insert(FilteredEntries, Entry)
-            end
-            for _, Entry in DisabledList do
-                table.insert(FilteredEntries, Entry)
+                if Group.Divider then
+                    table.insert(FilteredEntries, Group.Divider)
+                end
+
+                if Dropdown.KeepDisabledValuePosition then
+                    for _, Entry in Items do
+                        table.insert(FilteredEntries, Entry)
+                    end
+
+                    continue
+                end
+
+                for _, Entry in Items do
+                    if not Entry.IsDisabled then
+                        table.insert(FilteredEntries, Entry)
+                    end
+                end
+
+                for _, Entry in Items do
+                    if Entry.IsDisabled then
+                        table.insert(FilteredEntries, Entry)
+                    end
+                end
             end
         end
 
@@ -8572,10 +9298,32 @@ do
                 Row.Corner.BottomLeftRadius = IsLast and UDim.new(0, Library.CornerRadius / 2) or UDim.new(0, 0)
 
                 Row.Button.Text = Entry.FormattedValue
+                Row.Button.TextXAlignment = Entry.IsDivider and Enum.TextXAlignment.Center or Enum.TextXAlignment.Left
+                Row.LeftLine.Visible = Entry.IsDivider == true
+                Row.RightLine.Visible = Entry.IsDivider == true and Entry.Title ~= nil
+
+                if Entry.IsDivider then
+                    Row.Image.Visible = false
+                    Row.Button.Size = UDim2.new(1, 0, 0, ItemHeight - 1)
+                    Row.Button.Position = UDim2.fromOffset(0, 0)
+
+                    if Entry.Title then
+                        local TitleWidth = Library:GetTextBounds(Entry.Title, Library.Scheme.Font, 14)
+                        local HalfWidth = TitleWidth // 2 + 10
+
+                        Row.LeftLine.Size = UDim2.new(0.5, -7 - HalfWidth, 0, 2)
+                        Row.RightLine.Size = UDim2.new(0.5, -7 - HalfWidth, 0, 2)
+                    else
+                        Row.LeftLine.Size = UDim2.new(1, -14, 0, 2)
+                    end
+
+                    Row:UpdateButton()
+                    continue
+                end
 
                 if Entry.ValueImage then
+                    Row.Image = Library:ApplyIcon(Row.Image, Entry.ValueImage)
                     Row.Image.Visible = true
-                    Library:ApplyLucideIcon(Row.Image, Entry.ValueImage)
                     Row.Button.Size = UDim2.new(1, -18, 0, ItemHeight)
                     Row.Button.Position = UDim2.fromOffset(18, 0)
                 else
@@ -8620,7 +9368,7 @@ do
 
         local function ApplyDragIndex(Index, InRange)
             local Entry = FilteredEntries[Index]
-            if not Entry or Entry.IsDisabled then
+            if not Entry or Entry.IsDisabled or Entry.IsDivider then
                 return
             end
 
@@ -8707,9 +9455,7 @@ do
                 Parent = Container,
             }); table.insert(Library.SpecificCorners, Corner)
 
-            local Image = New("ImageLabel", {
-                BackgroundTransparency = 1,
-                Image = "",
+            local Image = Library:CreateIcon(nil, {
                 ImageTransparency = 0.5,
                 Size = UDim2.fromOffset(16, 16),
                 Position = UDim2.fromOffset(4, 3),
@@ -8720,6 +9466,7 @@ do
             local Button = New("TextButton", {
                 BackgroundTransparency = 1,
                 Size = UDim2.new(1, 0, 0, ItemHeight),
+                RichText = true,
                 Text = "",
                 TextSize = 14,
                 TextTransparency = 0.5,
@@ -8732,14 +9479,42 @@ do
                 Parent = Button,
             })
 
+            local LeftLine = New("Frame", {
+                BackgroundColor3 = "MainColor",
+                BorderColor3 = "OutlineColor",
+                BorderSizePixel = 1,
+                Position = UDim2.fromOffset(7, (ItemHeight - 1) / 2 - 1),
+                Visible = false,
+                Parent = Container,
+            })
+
+            local RightLine = New("Frame", {
+                AnchorPoint = Vector2.new(1, 0),
+                BackgroundColor3 = "MainColor",
+                BorderColor3 = "OutlineColor",
+                BorderSizePixel = 1,
+                Position = UDim2.new(1, -7, 0, (ItemHeight - 1) / 2 - 1),
+                Visible = false,
+                Parent = Container,
+            })
+
             Row.Container = Container
             Row.Corner = Corner
             Row.Image = Image
             Row.Button = Button
+            Row.LeftLine = LeftLine
+            Row.RightLine = RightLine
 
             function Row:UpdateButton()
                 local Entry = Row.Entry
                 if not Entry then
+                    return
+                end
+
+                if Entry.IsDivider then
+                    Row.Selected = false
+                    Container.BackgroundTransparency = 1
+                    Button.TextTransparency = 0.5
                     return
                 end
 
@@ -8756,13 +9531,13 @@ do
                 Button.TextTransparency = Entry.IsDisabled and 0.8 or Selected and 0 or 0.5
 
                 if Entry.ValueImage then
-                    Image.ImageTransparency = Entry.IsDisabled and 0.8 or Selected and 0 or 0.5
+                    SetIconProperties(Row.Image, { ImageTransparency = Entry.IsDisabled and 0.8 or Selected and 0 or 0.5 })
                 end
             end
 
             table.insert(Dropdown.Connections, Button.MouseButton1Click:Connect(function()
                 local Entry = Row.Entry
-                if not Entry or Entry.IsDisabled or DragSelecting then
+                if not Entry or Entry.IsDisabled or Entry.IsDivider or DragSelecting then
                     return
                 end
 
@@ -8796,7 +9571,7 @@ do
 
             table.insert(Dropdown.Connections, Button.MouseEnter:Connect(function()
                 local Entry = Row.Entry
-                if not Entry or Entry.IsDisabled then
+                if not Entry or Entry.IsDisabled or Entry.IsDivider then
                     return
                 end
 
@@ -8811,16 +9586,12 @@ do
                     TextTransparency = 0.25,
                 }):Play()
 
-                if Image then
-                    TweenService:Create(Image, Library.TweenInfo, {
-                        ImageTransparency = 0.25,
-                    }):Play()
-                end
+                TweenIcon(Row.Image, { ImageTransparency = 0.25 })
             end))
 
             table.insert(Dropdown.Connections, Button.MouseLeave:Connect(function()
                 local Entry = Row.Entry
-                if not Entry or Entry.IsDisabled then
+                if not Entry or Entry.IsDisabled or Entry.IsDivider then
                     return
                 end
 
@@ -8835,11 +9606,7 @@ do
                     TextTransparency = 0.5,
                 }):Play()
 
-                if Image then
-                    TweenService:Create(Image, Library.TweenInfo, {
-                        ImageTransparency = 0.5,
-                    }):Play()
-                end
+                TweenIcon(Row.Image, { ImageTransparency = 0.5 })
             end))
 
             table.insert(Dropdown.Connections, Button.InputBegan:Connect(function(StartInput)
@@ -8848,7 +9615,7 @@ do
                 end
 
                 local Entry = Row.Entry
-                if not Entry or Entry.IsDisabled then
+                if not Entry or Entry.IsDisabled or Entry.IsDivider then
                     return
                 end
 
@@ -8861,6 +9628,7 @@ do
                 table.clear(DragInitialValues)
 
                 for _, FilteredEntry in FilteredEntries do
+                    if FilteredEntry.IsDivider then continue end
                     DragInitialValues[FilteredEntry.Value] = Dropdown.Value[FilteredEntry.Value]
                 end
 
@@ -8922,6 +9690,10 @@ do
         end))
 
         local function ValueExists(Val)
+            if IsDropdownDivider(Val) then
+                return false
+            end
+
             if IsSequentialArray(Dropdown.Values) then
                 for _, Existing in Dropdown.Values do
                     if Existing == Val then
@@ -9084,6 +9856,7 @@ do
             MenuTable:Close()
             DisplayButton.Active = not Dropdown.Disabled
             Dropdown:UpdateColors()
+            Library:UpdateAddons(Dropdown)
 
             Library:UpdateDependencyBoxes()
         end
@@ -9164,7 +9937,7 @@ do
                     end
                 end
 
-            elseif Dropdown.Values[Default] ~= nil then
+            elseif Dropdown.Values[Default] ~= nil and not IsDropdownDivider(Dropdown.Values[Default]) then
                 table.insert(Resolved, IsDictionary and Default or Dropdown.Values[Default])
             end
 
@@ -9191,6 +9964,10 @@ do
         Groupbox:Resize()
 
         Dropdown.Holder = Holder
+        Dropdown.Label = Label
+        Dropdown.Container = DisplayContainer
+
+        Dropdown.AddSettings = BaseAddons.__index.AddSettings
         table.insert(Groupbox.Elements, Dropdown)
 
         Dropdown.Default = Defaults
@@ -9206,6 +9983,15 @@ do
             if Dropdown.Connections then
                 for _, Connection in Dropdown.Connections do
                     Connection:Disconnect()
+                end
+            end
+
+            if Dropdown.Addons then
+                for Index = #Dropdown.Addons, 1, -1 do
+                    local Addon = table.remove(Dropdown.Addons, Index)
+                    if Addon and Addon.Destroy then
+                        Addon:Destroy()
+                    end
                 end
             end
 
@@ -9292,6 +10078,29 @@ do
             local ModelPosition = (Viewport.Object :: PVInstance):GetPivot().Position
 
             Viewport.Camera.CFrame = CFrame.new(ModelPosition + Vector3.new(0, MaxExtent / 2, CameraDistance), ModelPosition)
+        end
+
+        local function GetPivotPosition()
+            return (Viewport.Object :: PVInstance):GetPivot().Position
+        end
+
+        local function OrbitCamera(Yaw: number, Pitch: number)
+            local Position = GetPivotPosition()
+            local Camera = Viewport.Camera
+
+            local RotationY = CFrame.fromAxisAngle(Vector3.new(0, 1, 0), Yaw)
+            Camera.CFrame = CFrame.new(Position) * RotationY * CFrame.new(-Position) * Camera.CFrame
+
+            local RotationX = CFrame.fromAxisAngle(Camera.CFrame.RightVector, Pitch)
+            local PitchedCFrame = CFrame.new(Position) * RotationX * CFrame.new(-Position) * Camera.CFrame
+
+            if PitchedCFrame.UpVector.Y > 0.1 then
+                Camera.CFrame = PitchedCFrame
+            end
+        end
+
+        local function ZoomCamera(Amount: number)
+            Viewport.Camera.CFrame += Viewport.Camera.CFrame.LookVector * Amount
         end
 
         local Holder = New("Frame", {
@@ -9388,18 +10197,7 @@ do
                 local MouseDelta = input.Position - LastMousePos
                 LastMousePos = input.Position
 
-                local Position = (Viewport.Object :: PVInstance):GetPivot().Position
-                local Camera = Viewport.Camera
-
-                local RotationY = CFrame.fromAxisAngle(Vector3.new(0, 1, 0), -MouseDelta.X * 0.01)
-                Camera.CFrame = CFrame.new(Position) * RotationY * CFrame.new(-Position) * Camera.CFrame
-
-                local RotationX = CFrame.fromAxisAngle(Camera.CFrame.RightVector, -MouseDelta.Y * 0.01)
-                local PitchedCFrame = CFrame.new(Position) * RotationX * CFrame.new(-Position) * Camera.CFrame
-
-                if PitchedCFrame.UpVector.Y > 0.1 then
-                    Camera.CFrame = PitchedCFrame
-                end
+                OrbitCamera(-MouseDelta.X * 0.01, -MouseDelta.Y * 0.01)
             end
         end))
 
@@ -9409,8 +10207,7 @@ do
             end
 
             if input.UserInputType == Enum.UserInputType.MouseWheel then
-                local ZoomAmount = input.Position.Z * 2
-                Viewport.Camera.CFrame += Viewport.Camera.CFrame.LookVector * ZoomAmount
+                ZoomCamera(input.Position.Z * 2)
             end
         end))
 
@@ -9431,7 +10228,7 @@ do
                 local currentDist = (touchPositions[1] - touchPositions[2]).Magnitude
                 local delta = (currentDist - LastPinchDist) * 0.1
                 LastPinchDist = currentDist
-                Viewport.Camera.CFrame += Viewport.Camera.CFrame.LookVector * delta
+                ZoomCamera(delta)
             elseif state == Enum.UserInputState.End or state == Enum.UserInputState.Cancel then
                 Pinching = false
             end
@@ -9482,6 +10279,65 @@ do
 
             Viewport.Camera = Camera
             ViewportFrame.CurrentCamera = Camera
+        end
+
+        function Viewport:SetCameraCFrame(NewCFrame: CFrame)
+            assert(typeof(NewCFrame) == "CFrame", "CFrame must be a valid CFrame.")
+
+            Viewport.Camera.CFrame = NewCFrame
+        end
+
+        function Viewport:GetCameraCFrame(): CFrame
+            return Viewport.Camera.CFrame
+        end
+
+        function Viewport:Rotate(Yaw: number, Pitch: number?)
+            if not Viewport.Object then
+                return
+            end
+
+            OrbitCamera(math.rad(Yaw or 0), math.rad(Pitch or 0))
+        end
+
+        function Viewport:Zoom(Amount: number)
+            assert(typeof(Amount) == "number", "Amount must be a number.")
+
+            ZoomCamera(Amount)
+        end
+
+        function Viewport:LookAt(Target: Vector3?)
+            if not Target and not Viewport.Object then
+                return
+            end
+
+            Viewport.Camera.CFrame = CFrame.lookAt(Viewport.Camera.CFrame.Position, Target or GetPivotPosition())
+        end
+
+        function Viewport:SetDistance(Distance: number)
+            assert(typeof(Distance) == "number" and Distance > 0, "Distance must be greater than 0.")
+            if not Viewport.Object then
+                return
+            end
+
+            local Position = GetPivotPosition()
+            local Offset = Viewport.Camera.CFrame.Position - Position
+            local Direction = Offset.Magnitude > 0 and Offset.Unit or -Viewport.Camera.CFrame.LookVector
+
+            Viewport.Camera.CFrame = CFrame.lookAt(Position + Direction * Distance, Position)
+        end
+
+        function Viewport:GetDistance(): number
+            if not Viewport.Object then
+                return 0
+            end
+
+            return (Viewport.Camera.CFrame.Position - GetPivotPosition()).Magnitude
+        end
+
+        function Viewport:SetFieldOfView(FieldOfView: number)
+            assert(typeof(FieldOfView) == "number", "FieldOfView must be a number.")
+
+            Viewport.Camera.FieldOfView = math.clamp(FieldOfView, 1, 120)
         end
 
         function Viewport:SetInteractive(Interactive: boolean)
@@ -9563,12 +10419,22 @@ do
         local Box = New("Frame", {
             AnchorPoint = Vector2.new(0, 1),
             BackgroundColor3 = "MainColor",
-            BorderColor3 = "OutlineColor",
-            BorderSizePixel = 1,
             BackgroundTransparency = Image.BackgroundTransparency,
+            ClipsDescendants = true,
             Position = UDim2.fromScale(0, 1),
             Size = UDim2.fromScale(1, 1),
             Parent = Holder,
+        })
+        table.insert(
+            Library.Corners,
+            New("UICorner", {
+                CornerRadius = UDim.new(0, Library.CornerRadius / 2),
+                Parent = Box,
+            })
+        )
+        New("UIStroke", {
+            Color = "OutlineColor",
+            Parent = Box,
         })
 
         New("UIPadding", {
@@ -9579,23 +10445,18 @@ do
             Parent = Box,
         })
 
-        local ImageProperties = {
+        local Icon = Library:GetCustomIcon(Image.Image)
+        assert(Icon, "Image must be a valid Roblox asset or a valid URL or a valid lucide icon.")
+
+        local ImageLabel = New("ImageLabel", {
             BackgroundTransparency = 1,
             Size = UDim2.fromScale(1, 1),
             ImageTransparency = Image.Transparency,
             ImageColor3 = Image.Color,
             ScaleType = Image.ScaleType,
             Parent = Box,
-        }
-
-        local Icon = Library:GetCustomIcon(Image.Image)
-        assert(Icon, "Image must be a valid Roblox asset or a valid URL or a valid lucide icon.")
-
-        ImageProperties.Image = Icon.Url
-        ImageProperties.ImageRectOffset = Icon.ImageRectOffset
-        ImageProperties.ImageRectSize = Icon.ImageRectSize
-
-        local ImageLabel = New("ImageLabel", ImageProperties)
+        })
+        FillInstance(ImageContent(Icon), ImageLabel)
 
         function Image:SetHeight(Height: number)
             assert(Height > 0, "Height must be greater than 0.")
@@ -9614,7 +10475,7 @@ do
             Image.RectOffset = Icon.ImageRectOffset
             Image.RectSize = Icon.ImageRectSize
 
-            Library:ApplyLucideIcon(ImageLabel, Icon)
+            FillInstance(ImageContent(Icon), ImageLabel)
             Image.Image = Icon.Url
         end
 
@@ -10140,6 +11001,9 @@ do
 
         function DepGroupbox:Resize()
             DepGroupboxContainer.Size = UDim2.new(1, 0, 0, (DepGroupboxList.AbsoluteContentSize.Y / Library.DPIScale) + 18)
+            if Groupbox.RefreshBoxHolderLayout then
+                Groupbox.RefreshBoxHolderLayout()
+            end
         end
 
         function DepGroupbox:Update(CancelSearch)
@@ -10251,6 +11115,17 @@ function Library:SetFont(FontFace)
 
     Library.Scheme.Font = FontFace
     Library:UpdateColorsUsingRegistry()
+
+    for _, Label in Labels do
+        if Label.DoesWrap then
+            Label:Display()
+            Label.Parent:Resize()
+        end
+    end
+
+    if Library.Window and Library.Window.RefreshTitleSize then
+        Library.Window:RefreshTitleSize()
+    end
 end
 
 function Library:SetBackgroundImage(Image: string | number)
@@ -10264,16 +11139,21 @@ function Library:SetBackgroundImage(Image: string | number)
     Library:UpdateColorsUsingRegistry()
 end
 
+local function GetNotifySide(): (boolean, boolean)
+    local Side = tostring(Library.NotifySide):lower()
+    return Side:find("left") ~= nil, Side:find("bottom") ~= nil
+end
+
 function Library:UpdateNotificationPositions(Snap: boolean?)
-    local IsLeft = Library.NotifySide:lower() == "left"
-    local XScale = IsLeft and 0 or 1
+    local IsLeft, IsBottom = GetNotifySide()
+    local XScale, YScale, YSign = IsLeft and 0 or 1, IsBottom and 1 or 0, IsBottom and -1 or 1
     local RunningY = 0
 
     for _, FakeBackground in NotifyOrder do
         local Data = Library.Notifications[FakeBackground]
         if not (Data and FakeBackground.Parent) then continue end
 
-        local Target = UDim2.new(XScale, 0, 0, RunningY)
+        local Target = UDim2.new(XScale, 0, YScale, RunningY * YSign)
         if Snap or not Data.PositionInitialized then
             FakeBackground.Position = Target
             Data.PositionInitialized = true
@@ -10288,21 +11168,17 @@ function Library:UpdateNotificationPositions(Snap: boolean?)
     end
 end
 
-function Library:SetNotifySide(Side: string)
+function Library:SetNotifySide(Side: "Left" | "Right" | "TopLeft" | "TopRight" | "BottomLeft" | "BottomRight" | string)
     Library.NotifySide = Side
 
-    local IsLeft = Side:lower() == "left"
-    if IsLeft then
-        NotificationArea.AnchorPoint = Vector2.new(0, 0)
-        NotificationArea.Position = UDim2.fromOffset(6, 6)
-    else
-        NotificationArea.AnchorPoint = Vector2.new(1, 0)
-        NotificationArea.Position = UDim2.new(1, -6, 0, 6)
-    end
+    local IsLeft, IsBottom = GetNotifySide()
+    local Anchor = Vector2.new(IsLeft and 0 or 1, IsBottom and 1 or 0)
+    NotificationArea.AnchorPoint = Anchor
+    NotificationArea.Position = UDim2.new(Anchor.X, IsLeft and 6 or -6, Anchor.Y, IsBottom and -6 or 6)
 
     for FakeBackground in Library.Notifications do
         if not (FakeBackground and FakeBackground.Parent) then continue end
-        FakeBackground.AnchorPoint = if IsLeft then Vector2.new(0, 0) else Vector2.new(1, 0)
+        FakeBackground.AnchorPoint = Anchor
     end
 
     if Library.UpdateNotificationPositions then
@@ -10353,8 +11229,9 @@ function Library:Notify(...)
         end)
     end
 
+    local IsLeft, IsBottom = GetNotifySide()
     local FakeBackground = New("Frame", {
-        AnchorPoint = Library.NotifySide:lower() == "left" and Vector2.new(0, 0) or Vector2.new(1, 0),
+        AnchorPoint = Vector2.new(IsLeft and 0 or 1, IsBottom and 1 or 0),
         AutomaticSize = Enum.AutomaticSize.Y,
         BackgroundTransparency = 1,
         Size = UDim2.fromOffset(0, 0),
@@ -10365,7 +11242,7 @@ function Library:Notify(...)
     local Holder = New("Frame", {
         AutomaticSize = Enum.AutomaticSize.Y,
         BackgroundColor3 = "MainColor",
-        Position = Library.NotifySide:lower() == "left" and UDim2.new(-1, -8, 0, 0) or UDim2.new(1, 8, 0, 0),
+        Position = IsLeft and UDim2.new(-1, -8, 0, 0) or UDim2.new(1, 8, 0, 0),
         Size = UDim2.new(1, 0, 0, 0),
         ZIndex = 5,
         Parent = FakeBackground,
@@ -10399,29 +11276,21 @@ function Library:Notify(...)
 
     local CloseButton
     if Data.Closable then
-        CloseButton = New("ImageButton", {
+        CloseButton = Library:CreateIcon(CloseIcon, {
             AnchorPoint = Vector2.new(1, 0),
-            BackgroundTransparency = 1,
-            Image = CloseIcon and CloseIcon.Url or "",
             ImageColor3 = "FontColor",
-            ImageRectOffset = CloseIcon and CloseIcon.ImageRectOffset or Vector2.zero,
-            ImageRectSize = CloseIcon and CloseIcon.ImageRectSize or Vector2.zero,
             ImageTransparency = 0.5,
             Position = UDim2.new(1, -8, 0, 8),
             Size = UDim2.fromOffset(14, 14),
             ZIndex = 6,
             Parent = Holder,
-        })
+        }, true)
 
         CloseButton.MouseEnter:Connect(function()
-            TweenService:Create(CloseButton, Library.TweenInfo, {
-                ImageTransparency = 0,
-            }):Play()
+            TweenIcon(CloseButton, { ImageTransparency = 0 })
         end)
         CloseButton.MouseLeave:Connect(function()
-            TweenService:Create(CloseButton, Library.TweenInfo, {
-                ImageTransparency = 0.5,
-            }):Play()
+            TweenIcon(CloseButton, { ImageTransparency = 0.5 })
         end)
         CloseButton.MouseButton1Click:Connect(function()
             Data:Destroy("user")
@@ -10448,13 +11317,11 @@ function Library:Notify(...)
     if Data.BigIcon then
         local ParsedIcon = Library:GetCustomIcon(Data.BigIcon)
         if ParsedIcon then
-            BigIconLabel = New("ImageLabel", {
-                BackgroundTransparency = 1,
+            BigIconLabel = Library:CreateIcon(ParsedIcon, {
                 Size = UDim2.fromOffset(24, 24),
                 ImageColor3 = Data.IconColor or "AccentColor",
                 Parent = ContentContainer,
             })
-            Library:ApplyLucideIcon(BigIconLabel, ParsedIcon)
         end
     end
 
@@ -10482,15 +11349,13 @@ function Library:Notify(...)
     if Data.Icon and TitleContainer then
         local ParsedIcon = Library:GetCustomIcon(Data.Icon)
         if ParsedIcon then
-            IconLabel = New("ImageLabel", {
-                BackgroundTransparency = 1,
+            IconLabel = Library:CreateIcon(ParsedIcon, {
                 AnchorPoint = Vector2.new(0, 0.5),
                 Position = UDim2.new(0, 0, 0.5, 1),
                 Size = UDim2.fromOffset(15, 15),
                 ImageColor3 = Data.IconColor or "FontColor",
                 Parent = TitleContainer,
             })
-            Library:ApplyLucideIcon(IconLabel, ParsedIcon)
         end
     end
 
@@ -10632,7 +11497,7 @@ function Library:Notify(...)
 
         TweenService
             :Create(Holder, Library.NotifyTweenInfo, {
-                Position = Library.NotifySide:lower() == "left" and UDim2.new(-1, -8, 0, -2) or UDim2.new(1, 8, 0, -2),
+                Position = GetNotifySide() and UDim2.new(-1, -8, 0, -2) or UDim2.new(1, 8, 0, -2),
             })
             :Play()
 
@@ -10719,6 +11584,3590 @@ function Library:Notify(...)
     return Data
 end
 
+-- ============================================================================
+-- YX · UI 美化模块   ——   所有 Icon「液态玻璃 + 渐变流光」（库原生原理版）
+-- ----------------------------------------------------------------------------
+-- 【本版改动】
+--   ① 液态玻璃：保留窗口级（玻璃高光层 + 面板半透明，移植自新版库 Library.lua），
+--      并新增【图标级】玻璃高光 —— 每个图标的流光渐变叠加库 AddGlassSheen 的
+--      112° 斜向反光带（Rotation + NumberSequence 透明度），不新建任何实例。
+--   ② 流光范围：从「标签按钮 Icon」扩大到【所有 Icon】——
+--      图片图标 ImageLabel / ImageButton，以及 lucide 字体图标
+--      （库 CreateIcon 生成的、带 IconPadding 子对象的 TextLabel / TextButton）。
+--   ③ 窗口 Icon 例外：CreateWindow 里 Icon=... 那个标题栏图标不加流光、不加玻璃，
+--      按「图标 asset id」+「父级是 TitleHolder」双保险精确定位。
+--   ④ 大图 / 背景图 / 赞助码 / 全透明占位一律跳过，避免误染色。
+--   ⑤ 窗口内磨砂玻璃底：不碰 Lighting / 游戏画面，在 MainFrame 内垫一层不透明的
+--      柔和磨砂渐变「景」，替代库原版靠 BlurEffect 模糊的游戏世界；面板半透明后
+--      透出的是这层有明暗层次的磨砂底，而不是同色纯色底板或杂乱 3D 场景。
+--      与「显示背景图」互斥（开图 -> 隐藏磨砂底；关图 -> 显示磨砂底）。
+--
+-- 【流光算法】1:1 采用 SyndromeXph/Obsidian 新版库 Library.lua：
+--   319-336     MakeVioletBlackGradient：4 关键点 sin + Lerp
+--   11022-11056 标题：每帧 RenderStepped 重建 ColorSequence + 强制白字基底
+--   11234-11248 页脚：每帧重建 + Offset 横向平移 + Rotation 摆动
+--   核心是【每帧重新构造整个 ColorSequence】，不是只建一次色带平移 Offset。
+--
+-- 【液态玻璃】库 1593-1644 行 ApplyLiquidGlass + AddGlassSheen：
+--   Rotation=112，Color 白(255,255,255)/浅蓝(200,214,255)/深蓝(36,42,70)，
+--   Transparency 0.7/0.88/0.97。窗口层照搬；图标层把透明度压到温和区间
+--   （默认 0 → 0.32 → 0），否则图标会淡到看不见。
+--
+-- 【用法】主脚本 BEAUTIFY_URL 指向本文件即可，主脚本无需改动。
+--   加载器签名固定：Loader(Library, ThemeManager, SaveManager)
+-- ============================================================================
+-- ============================================================================
+-- 【内嵌模式】YX 美化模块已并入本库，直接使用库作用域内的局部 Library。
+--   无需主脚本再通过 BEAUTIFY_URL 远程加载本模块。
+-- ============================================================================
+
+do
+    local function IsLockButton(Obj)
+        if not (Obj and Obj:IsA("TextButton")) then return false end
+        local Ok, T = pcall(function() return Obj.Text end)
+        return Ok and (T == "Lock" or T == "Unlock")
+    end
+    local function Watch(Obj)
+        if not (Obj and Obj:IsA("TextButton")) then return end
+        pcall(function()
+            Obj:GetPropertyChangedSignal("Text"):Connect(function()
+                if IsLockButton(Obj) then Obj.Visible = false end
+            end)
+        end)
+        if IsLockButton(Obj) then Obj.Visible = false end
+    end
+    local Floats = Library.Floats
+    if Floats then
+        pcall(function()
+            for _, Child in ipairs(Floats:GetChildren()) do Watch(Child) end
+            Floats.ChildAdded:Connect(Watch)
+        end)
+    end
+end
+
+local DefaultThemeBackground = {
+    Library = nil,
+    ThemeManager = nil,
+    Images = {
+        "https://raw.githubusercontent.com/YirdeX-Dev/Miscs/refs/heads/main/IMG_20261107_105307.jpg",
+    },
+
+    -- 只保留「背景 1」，启动即用它（已删除背景 2 / 背景 3 及其切换逻辑）
+    StartupImageIndex = 1,
+
+    -- 主题切换触发
+    TriggerNames = { "Default" },  -- 视为「默认主题」的主题名
+    MatchAssignedDefault = true,   -- 同时匹配被「设为默认」的主题名
+    AvoidRepeat = true,            -- 不连续抽到同一张
+    RollOnFirstApply = false,      -- 首次进入默认主题是否换图
+    NotifyOnSwitch = false,        -- 换图时是否弹通知
+    NotifyTitle = "默认主题背景",
+
+    -- 选择持久化（记住最后一次背景，下次启动不回到默认图）
+    PersistSelection = true,
+    PersistFolder = "MyScriptHub",
+    PersistFile = "MyScriptHub/yx_background.txt",
+
+    -- 延迟优化：预缓存背景图 + 绕过库对自定义图的强制重下载
+    PrefetchImages = true,         -- 后台预下载背景图
+    BypassRedownload = true,       -- 拦截 DownloadAsset(FileName, true) 的同步 HttpGet
+
+    -- 配色与渐变
+    ApplyPalette = true,           -- 按背景图套用配套主题色
+    TintIcons = true,              -- 图标统一青色
+    EnableGradient = true,         -- 图标叠加 UIGradient 渐变
+    GradientRotation = 45,
+
+    -- 按钮底色「填充」渐变（作用于按钮本体，不是描边）
+    EnableButtonGradient = true,     -- 给 AddButton 创建的按钮底色加渐变
+    -- 渐变轴角度，通用/CSS 语义：180 = 垂直「上 -> 下」（即向下加深的 180 度）
+    --   Roblox UIGradient.Rotation 以「左->右」为 0 顺时针增加，
+    --   内部换算：180(上->下)->90，0(下->上)->270，90(左->右)->0，270(右->左)->180
+    --   若要直接指定 Roblox 原生角度，设 ButtonGradientRotationOverride = 数值
+    ButtonGradientAngle = 180,
+    ButtonGradientRotationOverride = nil,
+    -- 规则：亮主题色 -> 上=主题色(限亮)，下=加深          =>「向下加深」
+    --       偏黑主题 -> 上=提亮(黑->灰)，下=主题色加深    =>「向上变亮」
+    ButtonGradientDarkAmount = 0.45,     -- 向下加深幅度（下端 = 上端 x 此值，越小越深）
+    ButtonGradientLightAmount = 0.45,    -- 向上提亮幅度（黑 -> 灰）
+    ButtonGradientDarkThreshold = 0.18,  -- 主题色感知亮度低于此值 => 判定偏黑，改走提亮
+    ButtonGradientTextSafeLum = 0.15,    -- 渐变亮端亮度上限，保证白色文字对比度 >= 4.5
+    ButtonGradientBrightness = 1.0,      -- 整体亮度微调（1 = 不变，<1 更暗）
+
+    -- 强调色填充（开关底色 / 滑块填充 / 通知进度条）：与按钮同款主题色自适应。
+    --   方向默认自动：开关这种矮胖胶囊用竖向（圆点盖住右半边，横向渐变只剩左半截，看不出），
+    --   滑块填充 / 通知进度条这种细长条用水平；把 AutoOrient 关掉则统一听 AccentGradientAngle
+    -- 滑块填充渐变：改成约 45° 斜向（不再是纯水平/纯垂直），亮暗沿对角线分布，
+    --   右端不会整条压暗发灰；配合下面把末端压暗幅度调高，解决「拖到后面不明显」。
+    AccentGradientAngle = 45,   -- 45=斜向渐变（细长条滑块/进度条用；开关仍自动走竖向）
+    AccentGradientDarkAmount = 0.72, -- 末端 = 亮端 x 此值（原 0.40 太暗 -> 0.72 右端更明显）
+    AccentGradientSafeLum = 0.62,    -- 强调色填充亮端亮度上限；按钮为了白字压到 0.15，
+                                     --   开关没有文字，放宽到 0.62，亮端保持主题色本身的鲜艳度
+    AccentGradientAutoOrient = true, -- 自动选方向：矮胖控件(开关胶囊)用竖向，细长条(滑块/进度条)用水平
+
+    -- 下拉菜单（Dropdown）：触发按钮 + 展开面板都跟随主题色
+    EnableDropdownGradient = true,   -- 关掉则下拉框保持库的纯色（MainColor / BackgroundColor）
+    DropdownGradientAngle = 180,     -- 触发按钮角度（180 = 垂直上->下，和按钮一致）
+    DropdownMenuTint = 0.35,         -- 展开面板混入主题色的比例（0 = 不染，1 = 整块主题色）
+    DropdownMenuAngle = 180,         -- 面板角度（180 = 垂直上->下）
+    DropdownMenuDarkAmount = 0.55,   -- 面板下端亮度 = 上端 x 此值（越小越黑）
+
+    -- 滑块：轨道（未填充的右半段）也跟随主题色，与填充形成同色系明暗对比
+    EnableSliderTrackGradient = true,
+    SliderTrackTint = 0.22,          -- 轨道混入主题色的比例（比填充低，才不会和已填段糊在一起）
+    SliderTrackAngle = 45,           -- 轨道与填充统一约 45° 斜向，避免两条渐变方向打架
+    SliderTrackDarkAmount = 0.68,    -- 轨道末端亮度（原 0.35 太暗 -> 0.68 到后面仍看得清）
+    -- 青 -> 蓝 -> 靛（仅图标使用；按钮和开关都改成跟随主题色了）
+    GradientStops = {
+        { 0.0, { 34, 211, 238 } },   -- #22D3EE 青
+        { 0.5, { 56, 132, 255 } },   -- #3884FF 蓝
+        { 1.0, { 99, 102, 241 } },   -- #6366F1 靛
+    },
+
+    -- 只保留「背景 1」一套主题色（已删除背景 2 / 背景 3 及其相关主题代码）
+    -- 字段：Background / Main / Accent / Outline / Font / Icon，均为 {R,G,B}
+    Palettes = {
+        { -- 背景 1：整体提亮一档的浅蓝灰（唯一保留的配色，作为启动默认）
+          -- 背景/主色/强调色保持明亮档；轮廓(Outline)与字体(Font)按要求改成纯白
+            Background = { 32, 44, 64 }, Main = { 46, 62, 88 },
+            Accent = { 130, 200, 248 }, Outline = { 255, 255, 255 },
+            Font = { 255, 255, 255 }, Icon = { 120, 220, 250 },
+        },
+    },
+
+    -- 控件填充色（按钮 / 开关 / 滑块填充 / 下拉）默认跟随主题强调色，切主题一起变。
+    --   想强制固定一个颜色时，填 {R,G,B}（0~255）；nil = 跟随主题。
+    ControlAccent = nil,
+    -- 雾蓝调和：跟随主题的同时把青绿偏色拉回雾蓝、略降饱和，和偏亮低饱和的背景图协调。
+    --   设为 false 则完全使用主题原色，不做任何调和。
+    MistTint = true,
+
+    -- 可选：背景变化时的回调 (Index, Url)
+    OnSelect = nil,
+
+    -- 运行时状态
+    LastIndex = nil,
+    LastUrl = nil,
+    LastAppliedTheme = nil,
+    Enabled = false,
+    _OriginalApplyTheme = nil,
+    _OriginalDownloadAsset = nil,
+    _OriginalSetBackground = nil,
+    _SkipFirstApply = false,
+    _CachedAssets = {},      -- FileName -> true
+    _GradientObjects = {},   -- 已插入的 UIGradient
+    _RegistryBackup = {},    -- Instance -> { {Property, Value, Kind}, ... }
+    _SchemeBackup = nil,     -- 应用配色前的 Scheme
+    _TargetsCollected = false,
+    _IconsTinted = false,
+
+    -- 动态底色渐变同步（开关在运行时开启 / 关闭也能保持渐变）
+    _GradientSyncConn = nil,  -- RunService.Heartbeat 连接
+    _DynamicTargets = {},     -- [Inst] = true，已被渐变接管的开关 / 强调底色
+    _StopsSignature = nil,    -- 上次应用的渐变配置签名（检测配置变更）
+
+    -- 按钮底色渐变（与图标/开关渐变完全隔离，互不干扰）
+    _ButtonTargets = {},          -- [Base] = true，已被接管的按钮底色
+    _ButtonGradientObjects = {},  -- 按钮专用 UIGradient 列表
+    _ButtonSignature = nil,       -- 按钮渐变配置签名（含亮度）
+
+    -- 下拉菜单 / 滑块轨道渐变（同样独立，互不接管）
+    _ElemTargets = {},            -- [Inst] = 渐变名（YXDropdownGradient / YXMenuGradient / YXSliderTrackGradient）
+    _ElemOrigins = {},            -- [Inst] = 接管前的注册键（MainColor / BackgroundColor）
+    _ElemGradientObjects = {},    -- 本路 UIGradient 列表
+    _ElemSignature = nil,         -- 本路配置签名
+}
+
+local RNG = (Random and Random.new) and Random.new() or nil
+local function RandomInt(Min, Max)
+    if RNG then return RNG:NextInteger(Min, Max) end
+    return math.random(Min, Max)
+end
+
+local ConfigKeys = {
+    "Images", "StartupImageIndex", "TriggerNames", "MatchAssignedDefault",
+    "AvoidRepeat", "RollOnFirstApply", "NotifyOnSwitch", "NotifyTitle",
+    "PersistSelection", "PersistFolder", "PersistFile", "PrefetchImages",
+    "BypassRedownload", "ApplyPalette", "TintIcons", "EnableGradient",
+    "GradientRotation", "GradientStops", "Palettes", "ControlAccent", "MistTint", "OnSelect",
+    "EnableButtonGradient", "ButtonGradientBrightness",
+    "ButtonGradientAngle", "ButtonGradientRotationOverride",
+    "ButtonGradientDarkAmount", "ButtonGradientLightAmount",
+    "ButtonGradientDarkThreshold", "ButtonGradientTextSafeLum",
+    "AccentGradientAngle", "AccentGradientDarkAmount", "AccentGradientSafeLum",
+    "AccentGradientAutoOrient",
+    "EnableDropdownGradient", "DropdownGradientAngle", "DropdownMenuTint",
+    "DropdownMenuAngle", "DropdownMenuDarkAmount",
+    "EnableSliderTrackGradient", "SliderTrackTint", "SliderTrackAngle", "SliderTrackDarkAmount",
+}
+
+-- 复刻库 Window:SetBackgroundImage 里的文件名提取规则，
+-- 保证预注册的 AssetName 与库内部使用的完全一致。
+local function AssetFileName(Url)
+    if type(Url) ~= "string" then return nil end
+    return Url:match("([^/]+)$")
+end
+
+local function RGB(Table)
+    if not (Color3 and Color3.fromRGB) then return nil end
+    local Ok, Color = pcall(Color3.fromRGB, Table[1], Table[2], Table[3])
+    return Ok and Color or nil
+end
+
+-- ============================================================
+-- 按钮渐变：主题色自适应明暗工具（颜色分量统一为 0~1 的 sRGB 编码值）
+--   Color3.fromRGB 得到的 .R/.G/.B 就是 0~1，这里所有运算都在此空间完成，
+--   与 RGB({0..255}) 的写法等价，实测与游戏内渲染吻合。
+-- ============================================================
+local function YXReadColor3(C)
+    if type(C) ~= "userdata" and type(C) ~= "table" then return nil end
+    local Ok, R, G, B = pcall(function() return C.R, C.G, C.B end)
+    if not (Ok and type(R) == "number" and type(G) == "number" and type(B) == "number") then
+        return nil
+    end
+    local Scale = (R > 1 or G > 1 or B > 1) and 255 or 1  -- 兼容少数 0~255 执行器
+    local function Bound(V)
+        if V < 0 then return 0 end
+        if V > 1 then return 1 end
+        return V
+    end
+    return { Bound(R / Scale), Bound(G / Scale), Bound(B / Scale) }
+end
+
+local function YXLuminance(C)
+    local function F(V)
+        if V <= 0.04045 then return V / 12.92 end
+        return ((V + 0.055) / 1.055) ^ 2.4
+    end
+    return 0.2126 * F(C[1]) + 0.7152 * F(C[2]) + 0.0722 * F(C[3])
+end
+
+-- 保持色相，仅按统一系数把亮度压到 MaxL 以内（二分求系数）
+local function YXClampLuminance(C, MaxL)
+    if YXLuminance(C) <= MaxL then return { C[1], C[2], C[3] } end
+    local Lo, Hi = 0, 1
+    for _ = 1, 20 do
+        local M = (Lo + Hi) / 2
+        local T = { C[1] * M, C[2] * M, C[3] * M }
+        if YXLuminance(T) > MaxL then Hi = M else Lo = M end
+    end
+    return { C[1] * Lo, C[2] * Lo, C[3] * Lo }
+end
+
+-- 线性混色：T=0 取 A，T=1 取 B（三个分量都在 0~1 空间）
+local function YXMix(A, B, T)
+    T = tonumber(T) or 0
+    if T < 0 then T = 0 elseif T > 1 then T = 1 end
+    return {
+        A[1] + (B[1] - A[1]) * T,
+        A[2] + (B[2] - A[2]) * T,
+        A[3] + (B[3] - A[3]) * T,
+    }
+end
+
+-- ============================================================
+-- 统一主题取色（控件 / 边框共用）
+--   背景图实测主色 RGB(170,179,198)、色相 221°、低饱和、偏亮，是雾蓝灰。
+--   因此在「跟随主题强调色」基础上做一次雾蓝调和：
+--     * 青绿偏色（约 140°~205°）拉回雾蓝色相 215°，避免再次发绿；
+--     * 其余色相保留，仅轻微降饱和；
+--     * 亮度沿用主题本身，不强行压暗。
+-- ============================================================
+local function YXMistTint(C)
+    if not (Color3 and Color3.new and Color3.fromHSV) then return C end
+    local Ok, Out = pcall(function()
+        local H, S, V = Color3.new(C[1], C[2], C[3]):ToHSV()
+        local Deg = H * 360
+        if Deg >= 140 and Deg <= 205 then
+            Deg = 215
+            S = math.min(S, 0.45)
+        else
+            S = S * 0.85
+        end
+        -- 只强制调和青绿偏色；其余色相仅 *0.85，不再统一压上限，避免把鲜艳主题色调得过淡
+        S = math.max(0.12, S)
+        local R = Color3.fromHSV(Deg / 360, S, V)
+        return { R.R, R.G, R.B }
+    end)
+    return (Ok and Out) or C
+end
+
+-- 读当前主题强调色并做雾蓝调和，返回 {r,g,b}（0~1）。Mist=false 可关闭调和。
+local function YXThemeAccentRGB(Lib, Mist)
+    local Base = YXReadColor3(Lib and Lib.Scheme and Lib.Scheme.AccentColor)
+    if not Base then Base = { 130 / 255, 200 / 255, 248 / 255 } end
+    if Mist ~= false then Base = YXMistTint(Base) end
+    return Base
+end
+
+function DefaultThemeBackground:SetLibrary(Lib)
+    self.Library = Lib
+    return self
+end
+
+function DefaultThemeBackground:SetThemeManager(Manager)
+    self.ThemeManager = Manager
+    return self
+end
+
+function DefaultThemeBackground:SetImages(Images)
+    assert(type(Images) == "table" and #Images > 0, "图片列表必须是非空数组")
+    self.Images = Images
+    self.LastIndex = nil
+    return self
+end
+
+function DefaultThemeBackground:Configure(Config)
+    if type(Config) ~= "table" then return self end
+    for _, Key in ipairs(ConfigKeys) do
+        if Config[Key] ~= nil then self[Key] = Config[Key] end
+    end
+    return self
+end
+
+function DefaultThemeBackground:IndexOfUrl(Url)
+    for Index, Item in ipairs(self.Images) do
+        if Item == Url then return Index end
+    end
+    return nil
+end
+
+function DefaultThemeBackground:IsDefaultTheme(ThemeName)
+    if type(ThemeName) ~= "string" then return false end
+    for _, Name in ipairs(self.TriggerNames) do
+        if ThemeName == Name then return true end
+    end
+    if self.MatchAssignedDefault and self.ThemeManager then
+        local Assigned = self.ThemeManager.DefaultThemeName
+        if Assigned and ThemeName == Assigned then return true end
+    end
+    return false
+end
+
+--// 选择持久化 //--
+function DefaultThemeBackground:ReadSelection()
+    if not (self.PersistSelection and readfile and isfile) then return nil end
+    local OkExists, Exists = pcall(isfile, self.PersistFile)
+    if not (OkExists and Exists) then return nil end
+    local OkRead, Content = pcall(readfile, self.PersistFile)
+    if not OkRead then return nil end
+    local Index = tonumber(tostring(Content):match("%d+"))
+    if Index and Index >= 1 and Index <= #self.Images then return Index end
+    return nil
+end
+
+function DefaultThemeBackground:SaveSelection(Index)
+    if not (self.PersistSelection and writefile) then return false end
+    if type(Index) ~= "number" then return false end
+    return pcall(function()
+        if makefolder and isfolder then
+            local Ok, Exists = pcall(isfolder, self.PersistFolder)
+            if not (Ok and Exists) then pcall(makefolder, self.PersistFolder) end
+        end
+        writefile(self.PersistFile, tostring(math.floor(Index)))
+    end)
+end
+
+--// 延迟优化：预注册缓存 + 拦截强制重下载 //--
+function DefaultThemeBackground:InstallCacheOptimizer()
+    local IM = self.Library and self.Library.ImageManager
+    if not (IM and type(IM.AddAsset) == "function" and type(IM.DownloadAsset) == "function") then
+        return false
+    end
+
+    if self.BypassRedownload and not self._OriginalDownloadAsset then
+        local Original = IM.DownloadAsset
+        self._OriginalDownloadAsset = Original
+        local Module = self
+        IM.DownloadAsset = function(Name, ForceRedownload, ...)
+            -- 库每次设置 URL 背景都会传 true 强制重新下载；对已缓存图片直接跳过
+            if ForceRedownload == true and Module._CachedAssets[Name] then
+                return true, nil
+            end
+            return Original(Name, ForceRedownload, ...)
+        end
+    end
+
+    if not self.PrefetchImages then return true end
+
+    local Module = self
+    local function Register(Url)
+        local Name = AssetFileName(Url)
+        if not Name then return end
+        pcall(function()
+            if not IM.GetAsset or not IM.GetAsset(Name) then
+                pcall(IM.AddAsset, Name, 0, Url)   -- 首次注册并下载一次
+            end
+        end)
+        Module._CachedAssets[Name] = true
+    end
+
+    local Urls = {}
+    for _, Url in ipairs(self.Images) do Urls[#Urls + 1] = Url end
+    local function Work()
+        for _, Url in ipairs(Urls) do Register(Url) end
+    end
+    if task and task.spawn then pcall(task.spawn, Work) else Work() end
+    return true
+end
+
+--// 监听一切背景设置（含用户在「背景图片」输入框手动粘贴 URL）//--
+function DefaultThemeBackground:InstallBackgroundTracker()
+    local Lib = self.Library
+    if not (Lib and type(Lib.SetBackgroundImage) == "function") then return false end
+    if self._OriginalSetBackground then return true end
+
+    local Original = Lib.SetBackgroundImage
+    self._OriginalSetBackground = Original
+    local Module = self
+    Lib.SetBackgroundImage = function(LibSelf, Image, ...)
+        local Results = table.pack(Original(LibSelf, Image, ...))
+        pcall(function()
+            if type(Image) == "string" then
+                local Index = Module:IndexOfUrl(Image)
+                if Index and Index ~= Module.LastIndex then
+                    Module.LastIndex = Index
+                    Module.LastUrl = Module.Images[Index]
+                    Module:SaveSelection(Index)
+                    if Module.ApplyPalette then pcall(Module.ApplyPaletteFor, Module, Index) end
+                    if type(Module.OnSelect) == "function" then
+                        pcall(Module.OnSelect, Index, Module.LastUrl)
+                    end
+                end
+            end
+        end)
+        return table.unpack(Results, 1, Results.n)
+    end
+    return true
+end
+
+--// 应用背景 URL //--
+function DefaultThemeBackground:ApplyUrl(Url)
+    local Lib = self.Library
+    if not Lib or type(Url) ~= "string" or Url == "" then return false end
+
+    local Option = Lib.Options and Lib.Options.BackgroundImage
+    local Applied = false
+    if Option and Option.SetValue then
+        local Ok = pcall(function() Option:SetValue(Url) end)
+        Applied = Ok and Lib.Scheme ~= nil and Lib.Scheme.BackgroundImage == Url
+    end
+    if not Applied then
+        pcall(function() Lib:SetBackgroundImage(Url) end)
+    end
+    return true
+end
+
+--// 配色 / 图标青色 / 渐变 //--
+function DefaultThemeBackground:ApplyPaletteFor(Index, Force)
+    local Lib = self.Library
+    if not (self.ApplyPalette and Lib and Lib.Scheme) then return end
+    -- 默认只把「背景 1」配色套用一次（启动时）。切到别的主题时不再用固定调色板
+    --   覆盖主题自身的 AccentColor / BackgroundColor，渐变才能实时跟随当前主题。
+    -- Force = true：用于「从别的主题切回默认主题」。ThemeManager 刚用它自己的主题数据
+    --   整表覆盖了 Scheme，必须重新把背景 1 配色套回去，否则回切后配色不是启动那套默认值。
+    if self._PaletteApplied and not Force then return end
+    self._PaletteApplied = true
+    local P = self.Palettes[Index] or self.Palettes[1]
+    if not P then return end
+
+    if not self._SchemeBackup then
+        self._SchemeBackup = {}
+        for _, Key in ipairs({ "BackgroundColor", "MainColor", "AccentColor", "OutlineColor", "FontColor" }) do
+            self._SchemeBackup[Key] = Lib.Scheme[Key]
+        end
+        self._SchemeBackup.IconColor = Lib.Scheme.IconColor
+    end
+
+    -- Scheme 键 -> 配色表字段
+    local PaletteMap = {
+        { "BackgroundColor", "Background" },
+        { "MainColor", "Main" },
+        { "AccentColor", "Accent" },
+        { "OutlineColor", "Outline" },
+        { "FontColor", "Font" },
+    }
+    local function Set(Key, ValueTable)
+        local Color = RGB(ValueTable)
+        if Color then Lib.Scheme[Key] = Color end
+    end
+
+    -- 先同步颜色选择器（其 OnChanged 会触发 ThemeUpdate 回写 Scheme）
+    for _, Pair in ipairs(PaletteMap) do
+        local Color = RGB(P[Pair[2]])
+        local Opt = Lib.Options and Lib.Options[Pair[1]]
+        if Opt and Opt.SetValue and Color then
+            pcall(Opt.SetValue, Opt, Color)
+        end
+    end
+
+    -- 再显式写入精确值，避免颜色选择器 HSV 往返与回调副作用改变最终配色
+    Set("BackgroundColor", P.Background)
+    Set("MainColor", P.Main)
+    Set("AccentColor", P.Accent)
+    Set("OutlineColor", P.Outline)
+    Set("FontColor", P.Font)
+    if self.TintIcons then Set("IconColor", P.Icon) end
+
+    self:ApplyIconTint()
+    self:ApplyGradient()
+    if Lib.UpdateColorsUsingRegistry then pcall(Lib.UpdateColorsUsingRegistry, Lib) end
+end
+
+-- 收集需要染色的元素：图标（ImageColor3=FontColor）与强调色元素（AccentColor 系）
+function DefaultThemeBackground:CollectTargets()
+    local Lib = self.Library
+    if not (Lib and Lib.Registry) then return end
+    if self._TargetsCollected then return end
+    self._TargetsCollected = true
+
+    for Inst, Props in pairs(Lib.Registry) do
+        local List = {}
+        for Property, Index in pairs(Props) do
+            if type(Index) == "string" then
+                local Kind = nil
+                if Index == "FontColor" and Property == "ImageColor3" then
+                    Kind = "Icon"
+                elseif Index == "AccentColor" and (Property == "BackgroundColor3" or Property == "ImageColor3") then
+                    Kind = "Accent"
+                end
+                if Kind then
+                    table.insert(List, { Property = Property, Value = Index, Kind = Kind })
+                end
+            end
+        end
+        if #List > 0 then self._RegistryBackup[Inst] = List end
+    end
+end
+
+function DefaultThemeBackground:ApplyIconTint()
+    local Lib = self.Library
+    if not (self.TintIcons and Lib and Lib.Registry) then return end
+    self:CollectTargets()
+    if self._IconsTinted then return end
+    self._IconsTinted = true
+    for Inst, List in pairs(self._RegistryBackup) do
+        local Props = Lib.Registry[Inst]
+        if Props then
+            for _, Entry in ipairs(List) do
+                if Entry.Kind == "Icon" then
+                    Props[Entry.Property] = "IconColor"  -- 先统一青色；渐变成功时再改白色基底
+                end
+            end
+        end
+    end
+end
+
+-- 构建渐变色序列（图标 / 强调色 / 开关底色共用同一套）
+function DefaultThemeBackground:GetGradientStops()
+    local Ok, Stops = pcall(function()
+        local Keypoints = {}
+        for _, Stop in ipairs(self.GradientStops) do
+            local Color = RGB(Stop[2])
+            if Color then
+                table.insert(Keypoints, ColorSequenceKeypoint.new(Stop[1], Color))
+            end
+        end
+        if #Keypoints == 0 then return nil end
+        return ColorSequence.new(Keypoints)
+    end)
+    return Ok and Stops or nil
+end
+
+function DefaultThemeBackground:GetGradientWhite()
+    if Color3 and Color3.fromRGB then return Color3.fromRGB(255, 255, 255) end
+    if Color3 and Color3.new then return Color3.new(1, 1, 1) end
+    return nil
+end
+
+-- 配置签名：GradientStops / Rotation 变化时可刷新所有已建渐变
+function DefaultThemeBackground:StopsSignature()
+    local Parts = {}
+    for _, Stop in ipairs(self.GradientStops) do
+        local C = Stop[2] or {}
+        Parts[#Parts + 1] = string.format("%s:%s,%s,%s", tostring(Stop[1]),
+            tostring(C[1]), tostring(C[2]), tostring(C[3]))
+    end
+    return table.concat(Parts, "|") .. "@" .. tostring(self.GradientRotation)
+end
+
+-- 强调色填充的签名：主题色 + 自适应参数 + 角度；任一变化即刷新开关/滑块/进度条渐变
+function DefaultThemeBackground:AccentStopsSignature()
+    local C = self:GetThemeColor()
+    return string.format("%.4f,%.4f,%.4f", C[1], C[2], C[3])
+        .. "#AA" .. tostring(self.AccentGradientAngle)
+        .. "#DA" .. tostring(self.ButtonGradientDarkAmount)
+        .. "#LA" .. tostring(self.ButtonGradientLightAmount)
+        .. "#TH" .. tostring(self.ButtonGradientDarkThreshold)
+        .. "#SL" .. tostring(self.ButtonGradientTextSafeLum)
+        .. "#BR" .. tostring(self.ButtonGradientBrightness)
+        .. "#AD" .. tostring(self.AccentGradientDarkAmount)
+        .. "#AS" .. tostring(self.AccentGradientSafeLum)
+end
+
+function DefaultThemeBackground:RememberDynamicBackup(Inst, Property, Value)
+    local List = self._RegistryBackup[Inst]
+    if not List then List = {}; self._RegistryBackup[Inst] = List end
+    for _, Entry in ipairs(List) do
+        if Entry.Property == Property then return end   -- 已有原值更权威，不覆盖
+    end
+    table.insert(List, { Property = Property, Value = Value, Kind = "Dynamic" })
+end
+
+function DefaultThemeBackground:ApplyGradient()
+    local Lib = self.Library
+    if not (self.EnableGradient and Lib and Lib.Scheme and Lib.Registry) then return end
+    if not (Instance and Instance.new) then return end
+    if #self._GradientObjects > 0 then return end  -- 已插入
+    self:CollectTargets()
+
+    -- 库的 Registry 只支持单一 Color3，主题色本身无法设成渐变；
+    -- 这里只给「图标」叠加固定青->蓝->靛渐变（YXThemeGradient）。
+    --   强调色元素（开关开启时的底色 / 滑块填充 / 通知进度条）不再在这里接管，
+    --   改由 SyncDynamicGradients 每帧扫描 Registry 的 "AccentColor" 来接管：
+    --   这样即便库的 Toggle:Display 每帧把开关底色索引改回 "AccentColor"，
+    --   也不会和我们的自定义白键互相覆盖；运行时开启的开关也能立即拿到渐变，
+    --   且渐变颜色每帧用实时主题色重算，自动跟随主题切换。
+    local Stops = self:GetGradientStops()
+    local White = self:GetGradientWhite()
+    if not (Stops and White) then return end
+    Lib.Scheme.IconGradientBase = White
+
+    local Gradientable = {}
+    for Inst, List in pairs(self._RegistryBackup) do
+        local Props = Lib.Registry[Inst]
+        if Props then
+            for _, Entry in ipairs(List) do
+                if Entry.Kind == "Icon" then
+                    Props[Entry.Property] = "IconGradientBase"
+                    table.insert(Gradientable, Inst)
+                    break
+                end
+            end
+        end
+    end
+
+    for _, Inst in ipairs(Gradientable) do
+        pcall(function()
+            local Grad = Instance.new("UIGradient")
+            Grad.Name = "YXThemeGradient"
+            Grad.Rotation = self.GradientRotation
+            Grad.Color = Stops
+            Grad.Parent = Inst
+            table.insert(self._GradientObjects, Grad)
+        end)
+    end
+
+    -- 立即按新注册表键刷新一次，让白基底当场生效（原版依赖外部回写，单独调用会失效）
+    if Lib.UpdateColorsUsingRegistry then pcall(Lib.UpdateColorsUsingRegistry, Lib) end
+    self:InstallGradientSync()
+end
+
+-- ============================================================
+-- 动态底色渐变同步器
+--   库的 Toggle:Display() 每次都会直接写 Switch.BackgroundColor3（纯色），
+--   并把 Registry 标签在 "MainColor" / "AccentColor" 之间来回改：
+--       启动时关闭的开关 -> 标签是 "MainColor"，CollectTargets 收不到
+--       后来开启 / 反复切换 -> 库刷回纯 AccentColor，白基底与渐变一起丢失
+--   所以只靠启动时分类一次不够。这里低频扫描 Registry：
+--     · 当前为强调色底色的对象 -> 补渐变 + 白基底 + 自定义白键
+--     · 变回非强调色（开关关闭）-> 禁用渐变，交还库按原配色渲染
+--   同时覆盖运行时新增控件、主题回写、换背景后的配色刷新。
+-- ============================================================
+function DefaultThemeBackground:SyncDynamicGradients()
+    local Lib = self.Library
+    if not (self.EnableGradient and Lib and Lib.Registry and Lib.Scheme) then return end
+    if not (Instance and Instance.new) then return end
+
+    local White = self:GetGradientWhite()
+    if not White then return end
+    local IconRot = self.GradientRotation
+
+    -- 切主题 / 换背景会整表替换 Library.Scheme，自定义键 IconGradientBase 会一起丢。
+    --   丢了之后，运行时新开启的开关只能拿到 AccentColor 当基底，
+    --   渐变一叠上去就被压成发黑的一坨（同一个开关一半亮一半暗的元凶）。这里每轮补回。
+    if Lib.Scheme.IconGradientBase ~= White then
+        Lib.Scheme.IconGradientBase = White
+    end
+
+    -- 先算签名（便宜）：主题色/配置没变就复用缓存的 ColorSequence，不再每轮新建。
+    local IconSig   = self:StopsSignature()        -- 青蓝固定 + 45 度
+    local AccentSig = self:AccentStopsSignature()  -- 主题色 + 参数 + 角度
+    local IconChanged   = (IconSig   ~= self._IconStopsSignature)
+    local AccentChanged = (AccentSig ~= self._AccentStopsSignature)
+    self._IconStopsSignature   = IconSig
+    self._AccentStopsSignature = AccentSig
+
+    -- 图标路：青 -> 蓝 -> 靛 固定渐变（缓存）
+    local IconStops = self._CachedIconStops
+    if IconChanged or not IconStops then
+        IconStops = self:GetGradientStops()
+        self._CachedIconStops = IconStops
+    end
+    if not IconStops then return end
+
+    -- 强调色路：主题色自适应（开关底色 / 滑块填充 / 通知进度条 / 运行时新增），缓存
+    --   方向不写死：每个对象按自己的形状取（开关竖向、细长条水平），见 GetAccentRotationFor
+    local AccentStops = self._CachedAccentStops
+    if AccentChanged or not AccentStops then
+        AccentStops = self:GetAccentGradientStops()
+        self._CachedAccentStops = AccentStops
+    end
+
+    -- 已 Dismiss/Destroy 的临时控件（通知进度条等）跳过：库 Registry 不自动清理死对象，
+    --   不处理会反复为"尸体"建渐变并永不清登记（内存泄漏）。
+    local function IsDead(O)
+        -- 【真机根因】Roblox 的 Instance 是 userdata，读不存在的自定义成员
+        -- （旧写法里的 O._destroyed）会直接抛错，pcall 吞掉后 Ok=false -> 判死，
+        -- 整批真实控件被误杀，渐变一个都不建。这份文件里开关全靠 SyncDynamicGradients
+        -- 接管，所以默认开启和运行时开启的开关都没有渐变。
+        -- 只读 Instance 一定存在的标准属性 ClassName：读得出来就一律视为存活。
+        -- 仅在清理登记时调用（次数极少），宽进不误杀。
+        if O == nil then return true end
+        local Ok = pcall(function() return O.ClassName end)
+        return not Ok
+    end
+    -- 1) 强调色底色对象（含本次刚开启的开关 / 运行时通知进度条 / 滑块填充）
+    --    -> 补主题色自适应渐变 + 白基底 + 自定义白键
+    for Inst, Props in pairs(Lib.Registry) do
+        -- 不再对每个对象 pcall 判活：Registry 里都是库登记的控件，全量扫描上百个对象、
+        -- 每个一次 pcall 很费。个别已销毁对象由下面的 pcall 兜底，不会中断整批。
+        if Props then
+        pcall(function()
+        local Idx = Props.BackgroundColor3
+        if Idx == "AccentColor" or Idx == "IconGradientBase" then
+            local IsNew = (Idx == "AccentColor")
+            local Rot = self:GetAccentRotationFor(Inst)
+            local OkFind, Grad = pcall(function() return Inst:FindFirstChild("YXAccentGradient") end)
+            if not (OkFind and Grad) then
+                pcall(function()
+                    local G = Instance.new("UIGradient")
+                    G.Name = "YXAccentGradient"
+                    G.Rotation = Rot
+                    G.Color = AccentStops
+                    G.Parent = Inst
+                    table.insert(self._GradientObjects, G)
+                end)
+                OkFind, Grad = pcall(function() return Inst:FindFirstChild("YXAccentGradient") end)
+                if not (OkFind and Grad) then Grad = nil end
+            end
+            if Grad and AccentStops then
+                Grad.Enabled = true
+                -- 强调色每帧用实时主题色：新建即写入，主题/配置变化(AccentChanged)统一刷新
+                if IsNew or AccentChanged then
+                    Grad.Color = AccentStops
+                end
+                -- 窗口缩放 / 首次布局后尺寸才有效，每轮校正方向
+                if Grad.Rotation ~= Rot then
+                    Grad.Rotation = Rot
+                end
+                if Inst.BackgroundColor3 ~= White then Inst.BackgroundColor3 = White end
+                -- 不再把 Registry 索引改写成自定义键：库的 Toggle:Display 每帧会把开关
+                -- 底色索引改回 "AccentColor"，改写它只会反复互踩。不透明 UIGradient 会完整
+                -- 覆盖 BackgroundColor3，所以无需抢白基底，库按原索引渲染底色即可，渐变照样显示。
+                self._DynamicTargets[Inst] = true
+            end
+        end
+        end)
+        end
+    end
+
+    -- 2) 之前接管过、现在变回非强调色（开关关闭 / 滑块 disabled / 进度条消失）
+    --    -> 禁用渐变，交还库按原配色渲染
+    for Inst in pairs(self._DynamicTargets) do
+        local Props = Lib.Registry[Inst]
+        if not Props then
+            self._DynamicTargets[Inst] = nil
+        else
+            local Idx = Props.BackgroundColor3
+            if Idx == nil then
+                -- 非底色对象（图标等）不再跟踪，但不动它的渐变
+                self._DynamicTargets[Inst] = nil
+            elseif Idx ~= "IconGradientBase" and Idx ~= "AccentColor" then
+                local OkFind, Grad = pcall(function()
+                    return Inst:FindFirstChild("YXAccentGradient") or Inst:FindFirstChild("YXThemeGradient")
+                end)
+                if OkFind and Grad then Grad.Enabled = false end
+                local C = (type(Idx) == "string") and Lib.Scheme[Idx] or nil
+                if C then
+                    pcall(function()
+                        if Inst.BackgroundColor3 == White then Inst.BackgroundColor3 = C end
+                    end)
+                end
+                self._DynamicTargets[Inst] = nil
+            end
+        end
+    end
+
+    -- 3) 配置变化 -> 刷新所有已建渐变（图标 / 强调色分别按各自签名）
+    if IconChanged then
+        for _, Grad in ipairs(self._GradientObjects) do
+            if Grad.Name == "YXThemeGradient" then
+                Grad.Color = IconStops
+                Grad.Rotation = IconRot
+            end
+        end
+    end
+    if AccentChanged then
+        for _, Grad in ipairs(self._GradientObjects) do
+            if Grad.Name == "YXAccentGradient" then
+                Grad.Color = AccentStops
+                local OkP, Parent = pcall(function() return Grad.Parent end)
+                Grad.Rotation = self:GetAccentRotationFor(OkP and Parent or nil)
+            end
+        end
+    end
+end
+
+
+-- ============================================================
+-- 按钮底色渐变（填充渐变，作用于按钮本体；不是 UIStroke 描边）
+--
+--   为什么不能按 Registry 标签抓：库里 "MainColor" 有几十处，分组框、
+--   输入框、下拉框、标签按钮、Toggle 外层按钮都用它，一律接管会染花半个 UI。
+--   所以走库的一等公民对象模型：
+--       Library.Tabs → Tab.Groupboxes / Tabboxes / DependencyGroupboxes
+--                    → Groupbox.Elements → Type=="Button" / "SubButton" → .Base
+--   动态扫描，运行时新增的按钮（含 SaveManager/ThemeManager 生成的）也会自动纳入。
+--
+--   为什么跟着主题色走：按钮渐变不再写死配色，每 0.05s 读一次
+--   Library.Scheme.AccentColor（换背景 / ThemeManager 切主题都会改它），
+--   由它实时生成同色相的垂直渐变；签名变化即刷新所有按钮。
+--
+--   方向规则（ButtonGradientAngle = 180，垂直「上 -> 下」）：
+--     主题色较亮       -> 上 = 主题色(限亮)，下 = 加深   =>「向下加深」
+--     主题色偏黑(近黑) -> 上 = 提亮成灰，下 = 主题色加深 =>「向上变亮」
+--   两端都经 YXClampLuminance 限亮，保证按钮白色文字对比度 >= 4.5。
+--
+--   为什么独立：用独立白键 ButtonGradientBase、独立对象表 _ButtonTargets /
+--   _ButtonGradientObjects，避免和开关同步器(_DynamicTargets / _GradientObjects)
+--   互相接管或误禁用；库 UpdateColorsUsingRegistry 回写时会按白键刷成白色，
+--   不会把渐变冲成纯色。
+-- ============================================================
+-- 取「控件填充渐变基色」：跟随主题强调色（Scheme.AccentColor），切主题自动换色，
+--   再经 YXMistTint 做雾蓝调和，避免青绿偏色、并和背景图的雾蓝灰协调。
+--   ControlAccent 填 {R,G,B} 可强制固定；MistTint=false 可关闭调和。
+function DefaultThemeBackground:GetThemeColor()
+    local Base
+    local C = self.ControlAccent
+    if type(C) == "table" and C[1] then
+        Base = { (C[1] or 0) / 255, (C[2] or 0) / 255, (C[3] or 0) / 255 }
+    else
+        local Lib = self.Library
+        Base = YXReadColor3(Lib and Lib.Scheme and Lib.Scheme.AccentColor)
+        if not Base then
+            -- 回退：当前背景配套的 Accent
+            local P = self.Palettes[self.LastIndex or 1] or self.Palettes[1]
+            if P and P.Accent then
+                Base = { (P.Accent[1] or 0) / 255, (P.Accent[2] or 0) / 255, (P.Accent[3] or 0) / 255 }
+            else
+                Base = { 0.20, 0.40, 0.70 }
+            end
+        end
+    end
+    if self.MistTint ~= false then Base = YXMistTint(Base) end
+    return Base
+end
+
+-- 通用/CSS 渐变角度 -> Roblox UIGradient.Rotation
+function DefaultThemeBackground:GetButtonGradientRotation()
+    local Override = self.ButtonGradientRotationOverride
+    if type(Override) == "number" then return Override % 360 end
+    local A = tonumber(self.ButtonGradientAngle) or 180
+    return (A - 90) % 360
+end
+
+-- 强调色填充渐变角度（开关 / 滑块 / 进度条）；默认水平(0)，可与按钮视觉分离
+function DefaultThemeBackground:GetAccentGradientRotation()
+    local A = tonumber(self.AccentGradientAngle)
+    if A == nil then return self.GradientRotation end
+    return (tonumber(A) or 0) % 360
+end
+
+-- 实际角度：开关是矮胖胶囊，圆点盖住右半边，横向渐变只剩左半截 -> 看不出；
+--   这类控件改竖向，露出来的左半区正好走完 亮 -> 暗 的整条渐变。
+--   滑块填充 / 通知进度条是细长条，用配置的基础角度（当前 45° 斜向）。
+function DefaultThemeBackground:GetAccentRotationFor(Inst)
+    local Base = self:GetAccentGradientRotation()
+    if not self.AccentGradientAutoOrient or not Inst then return Base end
+    local Ok, Size = pcall(function() return Inst.AbsoluteSize end)
+    if Ok and Size and Size.X ~= nil and Size.Y ~= nil then
+        local SX = tonumber(Size.X) or 0
+        local SY = tonumber(Size.Y) or 0
+        -- 高度够、且宽高比接近方形/矮胖 => 开关类，竖向
+        if SY >= 10 and SX > 0 and SX <= SY * 2.2 then
+            return 90
+        end
+    end
+    return Base
+end
+
+-- 依据当前主题色生成按钮渐变（垂直 上 -> 下）
+--   亮色：上 = 主题色(限亮)，下 = 加深         -> 向下加深
+--   偏黑：上 = 提亮(黑->灰)，下 = 主题色加深   -> 向上变亮
+function DefaultThemeBackground:GetButtonGradientStops(DarkAmtOverride, SafeLumOverride)
+    local function Num(V, Def)
+        V = tonumber(V)
+        if not V then return Def end
+        if V < 0 then return 0 end
+        if V > 1 then return 1 end
+        return V
+    end
+    local DarkAmt   = Num(DarkAmtOverride or self.ButtonGradientDarkAmount, 0.45)
+    local LightAmt  = Num(self.ButtonGradientLightAmount, 0.45)
+    local Threshold = Num(self.ButtonGradientDarkThreshold, 0.18)
+    local SafeLum   = Num(SafeLumOverride or self.ButtonGradientTextSafeLum, 0.15)
+    local Overall   = tonumber(self.ButtonGradientBrightness) or 1.0
+    if Overall < 0 then Overall = 0 end
+
+    local Theme  = self:GetThemeColor()
+    local IsDark = (YXLuminance(Theme) < Threshold)
+    local Base   = YXClampLuminance(Theme, SafeLum)
+
+    local Bottom = { Base[1] * DarkAmt, Base[2] * DarkAmt, Base[3] * DarkAmt }
+    local Top
+    if IsDark then
+        -- 黑 -> 灰：朝白色方向提亮，再限亮保证白字可读
+        local Lift = {
+            Base[1] + (1 - Base[1]) * LightAmt,
+            Base[2] + (1 - Base[2]) * LightAmt,
+            Base[3] + (1 - Base[3]) * LightAmt,
+        }
+        Top = YXClampLuminance(Lift, SafeLum)
+    else
+        Top = Base
+    end
+
+    local A = { Top[1] * Overall, Top[2] * Overall, Top[3] * Overall }
+    local B = { Bottom[1] * Overall, Bottom[2] * Overall, Bottom[3] * Overall }
+    local Mid = { (A[1] + B[1]) / 2, (A[2] + B[2]) / 2, (A[3] + B[3]) / 2 }
+    local function ToColor(C)
+        return RGB({
+            math.floor(C[1] * 255 + 0.5),
+            math.floor(C[2] * 255 + 0.5),
+            math.floor(C[3] * 255 + 0.5),
+        })
+    end
+    local Ok, Stops = pcall(function()
+        return ColorSequence.new({
+            ColorSequenceKeypoint.new(0.0, ToColor(A)),
+            ColorSequenceKeypoint.new(0.5, ToColor(Mid)),
+            ColorSequenceKeypoint.new(1.0, ToColor(B)),
+        })
+    end)
+    return Ok and Stops or nil
+end
+
+-- 强调色填充（开关 / 滑块 / 进度条）用的渐变：
+--   算法与按钮完全一致（亮色向下加深、偏黑向上提亮），只是加深幅度单独配置，
+--   因为这些控件没有白色文字，不需要压到按钮那么暗。
+function DefaultThemeBackground:GetAccentGradientStops()
+    return self:GetButtonGradientStops(self.AccentGradientDarkAmount, self.AccentGradientSafeLum)
+end
+
+function DefaultThemeBackground:ButtonStopsSignature()
+    local C = self:GetThemeColor()
+    return string.format("%.4f,%.4f,%.4f", C[1], C[2], C[3])
+        .. "#A" .. tostring(self.ButtonGradientAngle)
+        .. "#O" .. tostring(self.ButtonGradientRotationOverride)
+        .. "#D" .. tostring(self.ButtonGradientDarkAmount)
+        .. "#L" .. tostring(self.ButtonGradientLightAmount)
+        .. "#T" .. tostring(self.ButtonGradientDarkThreshold)
+        .. "#S" .. tostring(self.ButtonGradientTextSafeLum)
+        .. "#B" .. tostring(self.ButtonGradientBrightness)
+end
+
+-- 收集所有「按钮底色实例」；白名单字段递归，避免遍历到 Connections/Tween 等无关表
+function DefaultThemeBackground:CollectButtonBases()
+    local Lib = self.Library
+    local Found, Seen = {}, {}
+    if not (Lib and Lib.Registry and type(Lib.Tabs) == "table") then return Found end
+
+    local Fields = { "Elements", "Groupboxes", "Tabboxes", "Tabs",
+                     "DependencyGroupboxes", "SubButton" }
+
+    local function Walk(Node, Depth)
+        if type(Node) ~= "table" or Depth > 8 or Seen[Node] then return end
+        Seen[Node] = true
+
+        if (Node.Type == "Button" or Node.Type == "SubButton") and Node.Base then
+            local Base = Node.Base
+            local Props = Lib.Registry[Base]
+            if Props then
+                local Idx = Props.BackgroundColor3
+                if Idx == "MainColor" or Idx == "BackgroundColor"
+                   or Idx == "ButtonGradientBase" then
+                    Found[Base] = true
+                end
+            end
+        end
+
+        for _, Key in ipairs(Fields) do
+            local Child = Node[Key]
+            if type(Child) == "table" then
+                if Child.Type ~= nil then
+                    Walk(Child, Depth + 1)             -- 单个对象（如 SubButton）
+                else
+                    for _, V in pairs(Child) do         -- 容器（数组或字典）
+                        if type(V) == "table" then Walk(V, Depth + 1) end
+                    end
+                end
+            end
+        end
+    end
+
+    for _, V in pairs(Lib.Tabs) do
+        if type(V) == "table" then Walk(V, 0) end
+    end
+    return Found
+end
+
+function DefaultThemeBackground:SyncButtonGradients()
+    local Lib = self.Library
+    if not (self.EnableButtonGradient and Lib and Lib.Registry and Lib.Scheme) then return end
+    if not (Instance and Instance.new) then return end
+    local White = self:GetGradientWhite()
+    if not White then return end
+    local Rot = self:GetButtonGradientRotation()
+    Lib.Scheme.ButtonGradientBase = White
+
+    local Signature = self:ButtonStopsSignature()
+    local ConfigChanged = (Signature ~= self._ButtonSignature)
+    self._ButtonSignature = Signature
+
+    -- 色标缓存：配置/主题未变就复用，不再每轮新建 ColorSequence
+    local Stops = self._CachedButtonStops
+    if ConfigChanged or not Stops then
+        Stops = self:GetButtonGradientStops()
+        self._CachedButtonStops = Stops
+    end
+    if not Stops then return end
+
+    -- 结构遍历（递归整个 Tabs）是最大热点：缓存结果，每 0.5s 才重建一次
+    local Now = os.clock()
+    local Bases = self._CachedButtonBases
+    if (not Bases) or (Now - (self._ButtonBasesAt or 0) >= 0.5) then
+        Bases = self:CollectButtonBases()
+        self._CachedButtonBases = Bases
+        self._ButtonBasesAt = Now
+    end
+
+    for Base in pairs(Bases) do
+        local Props = Lib.Registry[Base]
+        if Props then
+            local Idx = Props.BackgroundColor3
+            if Idx == "BackgroundColor" then
+                -- 按钮被 SetDisabled(true)：禁用渐变，把底色交还库按 BackgroundColor 渲染
+                local OkF, G = pcall(function() return Base:FindFirstChild("YXButtonGradient") end)
+                if OkF and G then G.Enabled = false end
+                pcall(function()
+                    if Base.BackgroundColor3 == White then
+                        Base.BackgroundColor3 = Lib.Scheme.BackgroundColor
+                    end
+                end)
+                self._ButtonTargets[Base] = nil
+            else
+                local OkF, G = pcall(function() return Base:FindFirstChild("YXButtonGradient") end)
+                if not (OkF and G) then
+                    pcall(function()
+                        local Grad = Instance.new("UIGradient")
+                        Grad.Name = "YXButtonGradient"
+                        Grad.Rotation = Rot
+                        Grad.Color = Stops
+                        Grad.Parent = Base
+                        table.insert(self._ButtonGradientObjects, Grad)
+                    end)
+                    OkF, G = pcall(function() return Base:FindFirstChild("YXButtonGradient") end)
+                    if not (OkF and G) then G = nil end
+                end
+                if G then
+                    G.Enabled = true
+                    if ConfigChanged then
+                        G.Color = Stops
+                        G.Rotation = Rot
+                    end
+                    pcall(function()
+                        if Base.BackgroundColor3 ~= White then Base.BackgroundColor3 = White end
+                    end)
+                    if Idx ~= "ButtonGradientBase" then
+                        self:RememberDynamicBackup(Base, "BackgroundColor3", Idx)
+                        Props.BackgroundColor3 = "ButtonGradientBase"
+                    end
+                    self._ButtonTargets[Base] = true
+                end
+            end
+        end
+    end
+
+    -- 已接管的按钮若已不在对象模型（被销毁/移除）或标签被外部改走，清登记
+    for Base in pairs(self._ButtonTargets) do
+        if not Bases[Base] then
+            local Props = Lib.Registry[Base]
+            if not Props or Props.BackgroundColor3 ~= "ButtonGradientBase" then
+                self._ButtonTargets[Base] = nil
+            end
+        end
+    end
+end
+
+
+-- ============================================================
+-- 下拉菜单 / 滑块轨道渐变（第三路，与图标-强调色、按钮完全隔离）
+--
+--   为什么不能按 Registry 键抓：
+--     下拉触发按钮、滑块轨道、分组框、输入框、Tab 按钮全都注册成 "MainColor"；
+--     下拉面板注册成 "BackgroundColor"（窗口背景、右键菜单也是它）。
+--     一律接管会染花半个 UI。所以走对象模型：
+--        Library.Tabs → ... → Elements → Type=="Dropdown" → .Container（触发按钮）
+--                                                       → .Menu.Menu（展开面板）
+--                                       Type=="Slider"  → .Holder 里的 TextButton（轨道）
+--   为什么用渐变：
+--     库只给单色。"MainColor" 的轨道和"BackgroundColor"的面板都是很深的底色，
+--     直接把主题色铺上去会整块变蓝、白字发灰。所以这里把主题色当"染色剂"，
+--     按比例混进背景色：面板/轨道仍是深色，但一眼能看出是当前主题的色系。
+-- ============================================================
+
+-- 面板底色：下拉菜单 / 滑块轨道的"底"，主题色只往上混
+function DefaultThemeBackground:GetPanelBaseColor()
+    local Lib = self.Library
+    local Read = YXReadColor3(Lib and Lib.Scheme and Lib.Scheme.BackgroundColor)
+    if Read then return Read end
+    local P = self.Palettes[self.LastIndex or 1] or self.Palettes[1]
+    if P and P.Background then
+        return { (P.Background[1] or 0) / 255, (P.Background[2] or 0) / 255, (P.Background[3] or 0) / 255 }
+    end
+    return { 0.05, 0.07, 0.12 }
+end
+
+-- 上 / 中 / 下 三色标（中间取两端均值，避免两色标在短控件上出现断带）
+function DefaultThemeBackground:MakeStops(Top, Bottom)
+    local function ToColor(C)
+        local function B(V)
+            if V < 0 then return 0 elseif V > 1 then return 1 end
+            return V
+        end
+        return RGB({
+            math.floor(B(C[1]) * 255 + 0.5),
+            math.floor(B(C[2]) * 255 + 0.5),
+            math.floor(B(C[3]) * 255 + 0.5),
+        })
+    end
+    local Mid = { (Top[1] + Bottom[1]) / 2, (Top[2] + Bottom[2]) / 2, (Top[3] + Bottom[3]) / 2 }
+    local Ok, Seq = pcall(function()
+        return ColorSequence.new({
+            ColorSequenceKeypoint.new(0.0, ToColor(Top)),
+            ColorSequenceKeypoint.new(0.5, ToColor(Mid)),
+            ColorSequenceKeypoint.new(1.0, ToColor(Bottom)),
+        })
+    end)
+    return Ok and Seq or nil
+end
+
+-- 下拉展开面板：深色板 + 主题色调，上亮下暗
+function DefaultThemeBackground:GetMenuGradientStops()
+    local function Num(V, Def)
+        V = tonumber(V); if not V then return Def end
+        if V < 0 then return 0 elseif V > 1 then return 1 end
+        return V
+    end
+    local Tint = Num(self.DropdownMenuTint, 0.35)
+    local Dark = Num(self.DropdownMenuDarkAmount, 0.55)
+    local Bg    = self:GetPanelBaseColor()
+    local Theme = self:GetThemeColor()
+    local Top    = YXMix(Bg, Theme, Tint)
+    local DarkBg = { Bg[1] * Dark, Bg[2] * Dark, Bg[3] * Dark }
+    local Bottom = YXMix(DarkBg, Theme, Tint * 0.40)
+    return self:MakeStops(Top, Bottom)
+end
+
+-- 滑块轨道：同色系，左亮右暗（横条方向）
+function DefaultThemeBackground:GetSliderTrackStops()
+    local function Num(V, Def)
+        V = tonumber(V); if not V then return Def end
+        if V < 0 then return 0 elseif V > 1 then return 1 end
+        return V
+    end
+    local Tint = Num(self.SliderTrackTint, 0.34)
+    local Dark = Num(self.SliderTrackDarkAmount, 0.45)
+    local Bg    = self:GetPanelBaseColor()
+    local Theme = self:GetThemeColor()
+    local Top    = YXMix(Bg, Theme, Tint)
+    local DarkBg = { Bg[1] * Dark, Bg[2] * Dark, Bg[3] * Dark }
+    local Bottom = YXMix(DarkBg, Theme, Tint * 0.45)
+    return self:MakeStops(Top, Bottom)
+end
+
+function DefaultThemeBackground:ElementStopsSignature()
+    local C = self:GetThemeColor()
+    local B = self:GetPanelBaseColor()
+    return string.format("%.4f,%.4f,%.4f", C[1], C[2], C[3])
+        .. string.format("|%.4f,%.4f,%.4f", B[1], B[2], B[3])
+        .. "#DT" .. tostring(self.DropdownMenuTint)
+        .. "#DD" .. tostring(self.DropdownMenuDarkAmount)
+        .. "#DA" .. tostring(self.DropdownGradientAngle)
+        .. "#MA" .. tostring(self.DropdownMenuAngle)
+        .. "#TT" .. tostring(self.SliderTrackTint)
+        .. "#TD" .. tostring(self.SliderTrackDarkAmount)
+        .. "#TA" .. tostring(self.SliderTrackAngle)
+end
+
+-- 收集三个目标集合：下拉触发按钮 / 下拉展开面板 / 滑块轨道
+function DefaultThemeBackground:CollectElementGradients()
+    local Lib = self.Library
+    local Out = { Dropdown = {}, Menu = {}, Track = {} }
+    if not (Lib and Lib.Registry and type(Lib.Tabs) == "table") then return Out end
+
+    local Seen = {}
+    local Fields = { "Elements", "Groupboxes", "Tabboxes", "Tabs",
+                     "DependencyGroupboxes", "SubButton" }
+
+    -- Holder 里第一个 TextButton 就是控件主体（Slider 的轨道 Bar / Dropdown 的触发按钮）
+    local function FirstButton(Holder)
+        if type(Holder) ~= "table" then return nil end
+        local Ok, R = pcall(function() return Holder:FindFirstChildWhichIsA("TextButton") end)
+        if Ok and R then return R end
+        local OkC, Kids = pcall(function() return Holder:GetChildren() end)
+        if OkC and type(Kids) == "table" then
+            for _, K in ipairs(Kids) do
+                if K.ClassName == "TextButton" then return K end
+            end
+        end
+        return nil
+    end
+
+    local function Walk(Node, Depth)
+        if type(Node) ~= "table" or Depth > 8 or Seen[Node] then return end
+        Seen[Node] = true
+
+        if Node.Type == "Dropdown" then
+            if Node.Container then Out.Dropdown[Node.Container] = true end
+            local MT = Node.Menu
+            if type(MT) == "table" and MT.Menu then Out.Menu[MT.Menu] = true end
+        elseif Node.Type == "Slider" then
+            local Bar = FirstButton(Node.Holder)
+            if Bar then Out.Track[Bar] = true end
+        end
+
+        for _, Key in ipairs(Fields) do
+            local Child = Node[Key]
+            if type(Child) == "table" then
+                if Child.Type ~= nil then
+                    Walk(Child, Depth + 1)          -- 单个对象（如 SubButton）
+                else
+                    for _, V in pairs(Child) do     -- 容器（数组或字典）
+                        if type(V) == "table" then Walk(V, Depth + 1) end
+                    end
+                end
+            end
+        end
+    end
+
+    for _, V in pairs(Lib.Tabs) do
+        if type(V) == "table" then Walk(V, 0) end
+    end
+    return Out
+end
+
+function DefaultThemeBackground:SyncElementGradients()
+    local Lib = self.Library
+    if not (Lib and Lib.Registry and Lib.Scheme) then return end
+    if not (Instance and Instance.new) then return end
+
+    local WantDrop  = self.EnableDropdownGradient and true or false
+    local WantTrack = self.EnableSliderTrackGradient and true or false
+
+    local White = self:GetGradientWhite()
+    if not White then return end
+    -- 白键：让渐变完整呈现；切主题会整表替换 Scheme，每轮补回
+    if Lib.Scheme.YXElemBase ~= White then Lib.Scheme.YXElemBase = White end
+
+    local Sig = self:ElementStopsSignature()
+    local Changed = (Sig ~= self._ElemSignature)
+    self._ElemSignature = Sig
+
+    -- 结构遍历（递归整个 Tabs）缓存 + 降频：每 0.5s 才重建一次
+    local Now = os.clock()
+    local Sets = self._CachedElemSets
+    if (not Sets) or (Now - (self._ElemSetsAt or 0) >= 0.5) then
+        Sets = self:CollectElementGradients()
+        self._CachedElemSets = Sets
+        self._ElemSetsAt = Now
+    end
+
+    -- 色标缓存：签名未变就复用，避免每轮新建 3 个 ColorSequence
+    local DropStops  = self._CachedDropStops
+    local MenuStops  = self._CachedMenuStops
+    local TrackStops = self._CachedTrackStops
+    if Changed or not (DropStops and MenuStops and TrackStops) then
+        DropStops  = self:GetButtonGradientStops()   -- 触发按钮有白字，沿用按钮那套限亮
+        MenuStops  = self:GetMenuGradientStops()
+        TrackStops = self:GetSliderTrackStops()
+        self._CachedDropStops  = DropStops
+        self._CachedMenuStops  = MenuStops
+        self._CachedTrackStops = TrackStops
+    end
+
+    -- 通用/CSS 角度 -> Roblox：180(上->下)=90，0(下->上)=270
+    local function CSSDeg(A, Def)
+        local V = tonumber(A); if not V then V = Def end
+        return (V - 90) % 360
+    end
+    local DropRot  = CSSDeg(self.DropdownGradientAngle, 180)
+    local MenuRot  = CSSDeg(self.DropdownMenuAngle, 180)
+    local TrackRot = (tonumber(self.SliderTrackAngle) or 0) % 360
+
+    local function IsDead(O)
+        -- 【真机根因】Roblox 的 Instance 是 userdata，读不存在的自定义成员
+        -- （旧写法里的 O._destroyed）会直接抛错，pcall 吞掉后 Ok=false -> 判死，
+        -- 整批真实控件被误杀，渐变一个都不建。这份文件里开关全靠 SyncDynamicGradients
+        -- 接管，所以默认开启和运行时开启的开关都没有渐变。
+        -- 只读 Instance 一定存在的标准属性 ClassName：读得出来就一律视为存活。
+        -- 仅在清理登记时调用（次数极少），宽进不误杀。
+        if O == nil then return true end
+        local Ok = pcall(function() return O.ClassName end)
+        return not Ok
+    end
+
+    local function Handle(Inst, GName, Stops, Rot, Want)
+        if not Inst or IsDead(Inst) then return end
+        local Props = Lib.Registry[Inst]
+        if not Props then return end
+
+        local OkF, Grad = pcall(function() return Inst:FindFirstChild(GName) end)
+        local WasNew = false
+        if not (OkF and Grad) then
+            if Want and Stops then
+                pcall(function()
+                    local G = Instance.new("UIGradient")
+                    G.Name = GName
+                    G.Rotation = Rot
+                    G.Color = Stops
+                    G.Parent = Inst
+                    table.insert(self._ElemGradientObjects, G)
+                end)
+                OkF, Grad = pcall(function() return Inst:FindFirstChild(GName) end)
+                if OkF and Grad then WasNew = true else Grad = nil end
+            else
+                Grad = nil
+            end
+        end
+
+        if not (Want and Stops and Grad) then
+            -- 关闭 / 无渐变：停用渐变，并把注册键、底色一并交还库按原配色渲染
+            if Grad then Grad.Enabled = false end
+            local Origin = self._ElemOrigins[Inst]
+            if Origin and Props.BackgroundColor3 == "YXElemBase" then
+                Props.BackgroundColor3 = Origin
+                local C = (type(Origin) == "string") and Lib.Scheme[Origin] or nil
+                if C then pcall(function() Inst.BackgroundColor3 = C end) end
+            end
+            self._ElemTargets[Inst] = nil
+            self._ElemOrigins[Inst] = nil
+            return
+        end
+
+        -- 与「按钮」那路一致的双保险：白基底 + 自定义白键。
+        --   库的 UpdateColorsUsingRegistry / 主题切换会把底色刷回 MainColor /
+        --   BackgroundColor（深色）；底色不是白的时，渐变与底色叠加会发暗、
+        --   看起来就是一块纯色平底。把注册键改成指向白色的 "YXElemBase"
+        --   （Lib.Scheme.YXElemBase 每轮补回白色），库回写时也会刷成白色，渐变才稳定可见。
+        --   下拉触发条 / 面板 / 滑块轨道的注册键不会被库像 Toggle:Display 那样反复改回，
+        --   所以这里改写是安全的，不会互踩。
+        local Idx = Props.BackgroundColor3
+        if Idx ~= "YXElemBase" then
+            self._ElemOrigins[Inst] = Idx
+            Props.BackgroundColor3 = "YXElemBase"
+        end
+        pcall(function()
+            if Inst.BackgroundColor3 ~= White then Inst.BackgroundColor3 = White end
+        end)
+
+        Grad.Enabled = true
+        if WasNew or Changed then Grad.Color = Stops end   -- 创建即写入；主题/背景变化统一刷新
+        if Grad.Rotation ~= Rot then Grad.Rotation = Rot end
+        self._ElemTargets[Inst] = GName
+    end
+
+    for Inst in pairs(Sets.Dropdown) do
+        Handle(Inst, "YXDropdownGradient", DropStops, DropRot, WantDrop)
+    end
+    for Inst in pairs(Sets.Menu) do
+        Handle(Inst, "YXMenuGradient", MenuStops, MenuRot, WantDrop)
+    end
+    for Inst in pairs(Sets.Track) do
+        Handle(Inst, "YXSliderTrackGradient", TrackStops, TrackRot, WantTrack)
+    end
+
+    -- 已接管的实例若被销毁 / 移出对象模型，清登记（库 Registry 不自动清理死对象）
+    for Inst in pairs(self._ElemTargets) do
+        if IsDead(Inst) then
+            self._ElemTargets[Inst] = nil
+            self._ElemOrigins[Inst] = nil
+        end
+    end
+end
+
+function DefaultThemeBackground:InstallGradientSync()
+    if not ((self.EnableGradient or self.EnableButtonGradient
+             or self.EnableDropdownGradient or self.EnableSliderTrackGradient) and self.Library) then return end
+    if self._GradientSyncConn then return end
+    local OkSvc, RunService = pcall(function() return game:GetService("RunService") end)
+    if not (OkSvc and RunService and RunService.Heartbeat) then return end
+    local Module = self
+    local Acc = 0
+    -- 渐变是静态贴图，无需 20Hz 刷新；默认降到约 8Hz，开关/主题响应仍在 0.12s 内，无感。
+    -- 配合下方色标/结构缓存，整体 CPU 占用大幅下降，缓解掉帧。可用 GradientSyncInterval 调整。
+    local Interval = tonumber(self.GradientSyncInterval) or 0.12
+    local OkConn, Conn = pcall(function()
+        return RunService.Heartbeat:Connect(function(dt)
+            Acc = Acc + (type(dt) == "number" and dt or 0.016)
+            if Acc < Interval then return end
+            Acc = 0
+            pcall(function() Module:SyncDynamicGradients() end)
+            pcall(function() Module:SyncButtonGradients() end)
+            pcall(function() Module:SyncElementGradients() end)
+        end)
+    end)
+    if OkConn then self._GradientSyncConn = Conn end
+    -- 安装后三路都立即跑一次，启动即生效（不必等首个心跳）：
+    --   默认开启的开关、滑块填充也要在首帧就带上渐变。
+    pcall(function() self:SyncDynamicGradients() end)
+    pcall(function() self:SyncButtonGradients() end)
+    pcall(function() self:SyncElementGradients() end)
+end
+
+--// 换图 //--
+function DefaultThemeBackground:Select(Index)
+    local Count = #self.Images
+    if Count == 0 then return false, "图片列表为空" end
+    if type(Index) ~= "number" then return false, "索引必须是数字" end
+    Index = math.max(1, math.min(Count, math.floor(Index)))
+
+    self.LastIndex = Index
+    self.LastUrl = self.Images[Index]
+    self:ApplyUrl(self.LastUrl)
+    if self.ApplyPalette then self:ApplyPaletteFor(Index) end
+    self:SaveSelection(Index)
+    if type(self.OnSelect) == "function" then pcall(self.OnSelect, Index, self.LastUrl) end
+    return true, self.LastUrl
+end
+
+function DefaultThemeBackground:Roll()
+    local Lib = self.Library
+    if not Lib then return false, "尚未调用 SetLibrary" end
+    local Count = #self.Images
+    if Count == 0 then return false, "图片列表为空" end
+
+    local Index
+    if Count == 1 then
+        Index = 1
+    elseif self.AvoidRepeat and self.LastIndex then
+        Index = RandomInt(1, Count - 1)
+        if Index >= self.LastIndex then Index = Index + 1 end
+    else
+        Index = RandomInt(1, Count)
+    end
+
+    local Url = self.Images[Index]
+    self.LastIndex = Index
+    self.LastUrl = Url
+    self:ApplyUrl(Url)
+    if self.ApplyPalette then self:ApplyPaletteFor(Index) end
+    self:SaveSelection(Index)
+    if type(self.OnSelect) == "function" then pcall(self.OnSelect, Index, Url) end
+
+    if self.NotifyOnSwitch and Lib.Notify then
+        pcall(function()
+            Lib:Notify({
+                Title = self.NotifyTitle,
+                Description = string.format("已切换背景图（第 %d / %d 张）", Index, Count),
+                Time = 3,
+            })
+        end)
+    end
+    return true, Url
+end
+
+--// 挂载 //--
+function DefaultThemeBackground:Enable()
+    if self.Enabled then return self end
+    assert(self.Library, "请先调用 SetLibrary(Library)")
+    -- ThemeManager 可选：内嵌进 Library.lua 后由外部主脚本单独加载，这里可能拿不到。
+    --   有则包装 ApplyTheme 实现「切主题自动回流背景/配色」，无则降级为仅启动套用背景。
+    local HasTM = (self.ThemeManager and type(self.ThemeManager.ApplyTheme) == "function") and true or false
+
+    self:InstallCacheOptimizer()
+    self:InstallBackgroundTracker()
+
+    -- 启动背景：优先上次保存的选择，否则用默认第 1 张（仅保留背景 1）
+    local Startup = self:ReadSelection() or self.StartupImageIndex
+    Startup = math.max(1, math.min(#self.Images, Startup))
+    self.LastIndex = Startup
+    self.LastUrl = self.Images[Startup]
+    self:ApplyUrl(self.LastUrl)
+    if self.ApplyPalette then self:ApplyPaletteFor(Startup) end
+    self:SaveSelection(Startup)
+
+    if HasTM then
+    local Module = self
+    local Original = self.ThemeManager.ApplyTheme
+    self._OriginalApplyTheme = Original
+    self._SkipFirstApply = (self.ThemeManager.AppliedToTab ~= true)
+
+    self.ThemeManager.ApplyTheme = function(Manager, ThemeName, ...)
+        local Results = table.pack(Original(Manager, ThemeName, ...))
+
+        if Module.Enabled and type(ThemeName) == "string" and ThemeName ~= "" then
+            local Previous = Module.LastAppliedTheme
+            local IsFirst = (Previous == nil)
+            local Changed = (Previous ~= ThemeName)
+            local SkipFirst = IsFirst and Module._SkipFirstApply
+
+            Module.LastAppliedTheme = ThemeName
+
+            if Module:IsDefaultTheme(ThemeName) then
+                -- 主题应用会把 BackgroundImage 清空（内置主题数据带 ""），贴回当前背景
+                if Changed and not IsFirst then
+                    -- 从别的主题「切回默认主题」：ThemeManager 刚用它自己的主题数据
+                    -- 整表覆盖了 Scheme，必须强制把「背景 1」配色重新套回，否则回切后
+                    -- 停留的是 ThemeManager 的默认主题配色，不是启动时那套默认配色。
+                    pcall(function()
+                        if Module.LastUrl then Module:ApplyUrl(Module.LastUrl) end
+                        if Module.ApplyPalette then
+                            Module:ApplyPaletteFor(Module.LastIndex, true)
+                        end
+                    end)
+                elseif Changed and (not SkipFirst or Module.RollOnFirstApply) then
+                    pcall(function() Module:Roll() end)
+                elseif Module.LastUrl then
+                    pcall(function()
+                        Module:ApplyUrl(Module.LastUrl)
+                        if Module.ApplyPalette then Module:ApplyPaletteFor(Module.LastIndex) end
+                    end)
+                end
+            end
+
+            -- 主题色刚变（切到别的主题 / 切回默认）立即重算各路渐变与白基底，
+            -- 不必等下个 0.05s 心跳，切换瞬间配色就跟上。
+            if Changed then
+                pcall(function() Module:SyncDynamicGradients() end)
+                pcall(function() Module:SyncElementGradients() end)
+                pcall(function() Module:SyncButtonGradients() end)
+            end
+        end
+
+        return table.unpack(Results, 1, Results.n)
+    end
+    end
+
+    self.Enabled = true
+    self:InstallGradientSync()
+    return self
+end
+
+function DefaultThemeBackground:Disable()
+    if not self.Enabled then return self end
+
+    if self._GradientSyncConn then
+        pcall(function() self._GradientSyncConn:Disconnect() end)
+        self._GradientSyncConn = nil
+    end
+
+    if self.ThemeManager and self._OriginalApplyTheme then
+        self.ThemeManager.ApplyTheme = self._OriginalApplyTheme
+    end
+    local Lib = self.Library
+    local IM = Lib and Lib.ImageManager
+    if IM and self._OriginalDownloadAsset then
+        IM.DownloadAsset = self._OriginalDownloadAsset
+    end
+    if Lib and self._OriginalSetBackground then
+        Lib.SetBackgroundImage = self._OriginalSetBackground
+    end
+
+    if self._SchemeBackup and Lib and Lib.Scheme then
+        for Key, Value in pairs(self._SchemeBackup) do
+            Lib.Scheme[Key] = Value
+        end
+        -- 自定义键原本可能不存在（备份值为 nil），pairs 遍历不到，需显式清除
+        Lib.Scheme.IconColor = self._SchemeBackup.IconColor
+        Lib.Scheme.IconGradientBase = nil
+        if Lib.UpdateColorsUsingRegistry then
+            pcall(Lib.UpdateColorsUsingRegistry, Lib)
+        end
+    end
+    -- 无论是否走过 ApplyPaletteFor，都清掉自定义 Scheme 键（ApplyGradient 会设置它）
+    if Lib and Lib.Scheme then
+        Lib.Scheme.IconGradientBase = nil
+        Lib.Scheme.ButtonGradientBase = nil
+        Lib.Scheme.YXElemBase = nil
+    end
+    if Lib and Lib.Registry then
+        for Inst, List in pairs(self._RegistryBackup) do
+            if Lib.Registry[Inst] then
+                for _, Entry in ipairs(List) do
+                    Lib.Registry[Inst][Entry.Property] = Entry.Value
+                end
+            end
+        end
+    end
+    -- 下拉触发按钮 / 面板 / 滑块轨道：白键换回原键（MainColor / BackgroundColor）
+    if Lib and Lib.Registry then
+        for Inst, Origin in pairs(self._ElemOrigins or {}) do
+            local Props = Lib.Registry[Inst]
+            if Props and Props.BackgroundColor3 == "YXElemBase" then
+                Props.BackgroundColor3 = Origin
+            end
+        end
+    end
+    for _, Grad in ipairs(self._GradientObjects) do
+        pcall(function() Grad:Destroy() end)
+    end
+    for _, Grad in ipairs(self._ButtonGradientObjects or {}) do
+        pcall(function() Grad:Destroy() end)
+    end
+    for _, Grad in ipairs(self._ElemGradientObjects or {}) do
+        pcall(function() Grad:Destroy() end)
+    end
+    -- 注册表已恢复，再回写一次，把白基底刷回各元素的原始配色
+    if Lib and Lib.UpdateColorsUsingRegistry then
+        pcall(Lib.UpdateColorsUsingRegistry, Lib)
+    end
+
+    self._OriginalApplyTheme = nil
+    self._OriginalDownloadAsset = nil
+    self._OriginalSetBackground = nil
+    self._SchemeBackup = nil
+    self._RegistryBackup = {}
+    self._GradientObjects = {}
+    self._CachedAssets = {}
+    self._TargetsCollected = false
+    self._IconsTinted = false
+    self._DynamicTargets = {}
+    self._StopsSignature = nil
+    self._IconStopsSignature = nil
+    self._AccentStopsSignature = nil
+    self._ButtonTargets = {}
+    self._ButtonGradientObjects = {}
+    self._ButtonSignature = nil
+    self._ElemTargets = {}
+    self._ElemOrigins = {}
+    self._ElemGradientObjects = {}
+    self._ElemSignature = nil
+    self._PaletteApplied = nil
+    self.LastAppliedTheme = nil
+    self.Enabled = false
+    return self
+end
+
+local Bg = DefaultThemeBackground
+Bg:SetLibrary(Library)
+-- ==================== 模块定义结束 ====================
+
+-- 「背景图片」选择下拉已移除：只保留背景 1，由 Bg:Enable() 自动套用，
+--   不在「UI 设置」里再显示切换项。OnSelect 保持默认 nil（模块内部调用都有判空保护）。
+-- [内嵌] Bg:Enable() -> 已移至 YXStart() 统一启动
+-- 自动配置加载为可选：独立版由主脚本传入 SaveManager 时执行；
+--   内嵌进 Library.lua 后无 SaveManager，跳过（自动配置由主脚本自行加载）。
+if SaveManager then pcall(function() SaveManager:LoadAutoloadConfig() end) end
+
+--    YXGradientBorder:Enable()          -- 窗口 + 标签页一起开（默认）
+--    YXGradientBorder:Disable()         -- 全部关闭
+--    YXGradientBorder:EnableTabs()      -- 只开标签页边框
+--    YXGradientBorder:DisableTabs()     -- 只关标签页边框
+--    YXGradientBorder:EnableWindow()    -- 只开窗口边框
+--    YXGradientBorder:DisableWindow()   -- 只关窗口边框
+--    YXGradientBorder:SetColors(Color3, Color3)   -- 端点 / 中点（覆盖默认的 亮青/浅青）
+--    YXGradientBorder:SetSpeed(90)     -- 窗口渐变速度（度/秒）
+--    YXGradientBorder:SetThickness(4)  -- 窗口描边粗细
+--    YXGradientBorder:SetPulse(true)   -- 窗口描边呼吸
+--    YXGradientBorder:SetTabSpeed(90)             -- 标签页渐变速度
+--    YXGradientBorder:SetTabThickness(2, 3)       -- 未选中 / 选中粗细
+--    YXGradientBorder:SetTabIdleTransparency(0.5) -- 未选中淡化程度
+--    YXGradientBorder:SetTabRadius(8)             -- 圆角；传 nil 恢复自动跟随
+--    YXGradientBorder:SetTabOnlyActive(true)      -- 只给选中的标签显示
+--    YXGradientBorder:SetTabIncludeContent(true)  -- 连标签内容区也加
+--    YXGradientBorder:EnableNotifs()   -- 只开通知流动渐变描边（Enable 时已自动开）
+--    YXGradientBorder:DisableNotifs()  -- 只关通知描边
+--    YXGradientBorder:SetNotifSpeed(90)       -- 通知渐变旋转速度
+--    YXGradientBorder:SetNotifThickness(2)    -- 通知描边粗细
+--  通知由库动态创建/销毁，模块每 0.2s 差量扫描 Library.Notifications，自动挂载与清理。
+--  窗口 / 标签页 / 通知边框统一「跟随主题强调色 + 雾蓝调和」，切主题一起换色，不再写死青色。
+--  也可直接改 YXGradientBorder.Tabs.xxx / Notifs.xxx（见下方配置表）后即生效。
+-- ============================================================
+
+local YXGradientBorder = (function(Library)
+    local M = {}
+
+    -- Library 由末尾 (...)(Library) 显式传入，避免 local 作用域歧义
+    local RunService = game:GetService("RunService")
+
+    -- ===== 窗口边框参数（v1 保持兼容）=====
+    M.Radius       = 12     -- 与 Window:SetCornerRadius(12) 保持一致
+    M.Thickness    = 4
+    M.Transparency = 0
+    M.Speed        = 120
+    M.Pulse        = true
+    M.Name         = "YXGradientBorder"
+    -- 边框颜色默认跟随主题强调色（雾蓝调和），切主题自动换色。
+    --   想固定颜色：把下面两行填成 Color3.fromRGB(...)，并把 FollowTheme 设为 false。
+    --   也可运行时调 YXGradientBorder:SetColors(Color3, Color3) 临时覆盖。
+    M.FollowTheme  = true   -- true = 边框跟随主题强调色；false = 用下面两个固定色
+    M.EdgeColor    = nil    -- 端点：默认由主题色压暗得到
+    M.MidColor     = nil    -- 中点：默认由主题色提亮得到的高光
+
+    -- ===== 标签页边框参数 =====
+    M.Tabs = {
+        Enabled            = false,
+        AutoEnable         = true,   -- Enable() 时自动一并开启标签页
+        Radius             = nil,    -- nil = 自动跟随按钮自带 UICorner；填数字覆盖
+        Thickness          = 2,      -- 未选中标签描边粗细
+        ActiveThickness    = 3,      -- 选中标签描边粗细
+        IdleTransparency   = 0.5,    -- 未选中标签描边淡化（0=实色 1=全隐）
+        ActiveTransparency = 0,      -- 选中标签描边透明度
+        Speed              = 120,    -- 标签渐变旋转速度（度/秒）
+        OnlyActive         = false,  -- true = 只有选中的标签显示边框
+        IncludeContent     = false,  -- true = 连 Tab.Container 内容区也加边框
+        ContentThickness   = 2,
+        ContentRadius      = 8,
+        Name               = "YXGradientBorder_Tab",
+    }
+
+    -- ===== 通知边框参数（流动渐变描边，动态出现的通知自动挂上）=====
+    M.Notifs = {
+        Enabled        = false,
+        AutoEnable     = true,   -- Enable() 时自动一并开启
+        Radius         = nil,    -- nil = 自动跟随通知自带 UICorner
+        Thickness      = 2,
+        Transparency   = 0,
+        Speed          = 120,    -- 渐变旋转速度（度/秒）
+        Name           = "YXGradientBorder_Notif",
+    }
+
+
+    M.Enabled = false   -- 窗口边框状态（标签页状态见 M.Tabs.Enabled / M.Notifs.Enabled）
+
+    -- ===== 运行时 =====
+    local winFrame, winCorner, winStroke, winGrad = nil, nil, nil, nil
+    local winConn, tabConn = nil, nil
+    local winLast, tabLast, tabAngle, scanAcc = 0, 0, 0, 0
+    -- Color 写入脏标记：buildSequence 按主题色缓存，引用不变就跳过 Roblox 属性写，
+    --   避免每帧对全部标签/通知重写同一个 ColorSequence（仅旋转仍需每帧写动画）。
+    local winLastSeq, tabLastSeq, notifLastSeq = nil, nil, nil
+    local manualSeq = nil
+    local tabItems = {}   -- [目标对象] = {frame, corner, stroke, grad, kind, tab}
+    local notifItems = {} -- [通知 Holder] = {frame, corner, stroke, grad}
+    local notifConn = nil
+    local notifLast, notifAngle, notifScanAcc = 0, 0, 0
+
+    local function clamp01(v)
+        if v < 0 then return 0 elseif v > 1 then return 1 end
+        return v
+    end
+    local function shade(c, factor)
+        -- factor>1 提亮，<1 压暗；限制到 [0,1]
+        return Color3.new(
+            clamp01(c.R * factor),
+            clamp01(c.G * factor),
+            clamp01(c.B * factor)
+        )
+    end
+
+    -- 读取主题强调色并做雾蓝调和（与控件、边框同一套取色），
+    --   再经库自带的 GetBetterColor 微调。
+    local function ReadAccentColor()
+        local Base = YXThemeAccentRGB(Library, true)
+        local Col = Color3.new(Base[1], Base[2], Base[3])
+        local Better = Library and Library.GetBetterColor
+        if type(Better) == "function" then
+            local Ok, C = pcall(Better, Library, Col, -1)
+            if Ok and C then return C end
+        end
+        return Col
+    end
+
+
+
+    -- 边框配色：跟随主题强调色（雾蓝调和），主题变化即重建序列，不再写死青色。
+    --   端点 = 主题色压暗，中点 = 主题色提亮降饱和的高光；0 与 1 端点相同，旋转接缝平滑。
+    --   窗口 / 标签页 / 通知三处每帧都取本函数返回值，主题一变三处一起更新。
+    --   签名计算降频到 0.12s，平时直接返回缓存，不增加每帧开销。
+    --   SetColors() 的 manualSeq 优先级最高，仍可运行时覆盖。
+    local function BuildThemeColors()
+        if M.FollowTheme == false then
+            return M.EdgeColor or Color3.fromRGB(140, 180, 220),
+                   M.MidColor  or Color3.fromRGB(190, 215, 240)
+        end
+        local Base = YXThemeAccentRGB(Library, true)
+        local H, S, V = Color3.new(Base[1], Base[2], Base[3]):ToHSV()
+        local Edge = M.EdgeColor or Color3.fromHSV(H, S, math.min(V, 0.80))
+        local Mid  = M.MidColor  or Color3.fromHSV(H, math.max(0.10, S * 0.55), math.min(1, V + 0.12))
+        return Edge, Mid
+    end
+
+    local themeSeq, themeSig, themeCheckAt = nil, nil, 0
+    local function buildSequence()
+        if manualSeq then return manualSeq end
+        local now = os.clock()
+        if themeSeq and (now - themeCheckAt) < 0.12 then return themeSeq end
+        themeCheckAt = now
+        local Edge, Mid = BuildThemeColors()
+        local Sig = string.format("%.4f,%.4f,%.4f|%.4f,%.4f,%.4f",
+            Edge.R, Edge.G, Edge.B, Mid.R, Mid.G, Mid.B)
+        if Sig ~= themeSig then
+            themeSig = Sig
+            themeSeq = ColorSequence.new({
+                ColorSequenceKeypoint.new(0.00, Edge),
+                ColorSequenceKeypoint.new(0.30, Edge),
+                ColorSequenceKeypoint.new(0.50, Mid),
+                ColorSequenceKeypoint.new(0.70, Edge),
+                ColorSequenceKeypoint.new(1.00, Edge),
+            })
+        end
+        return themeSeq
+    end
+
+    local function getMainFrame()
+        if not Library then return nil end
+        local w = Library.Window
+        local mf = w and w.MainFrame
+        if mf and mf.Parent then return mf end
+        return nil
+    end
+
+    -- 通用：在 parent 内建一层透明描边框（所有目标共用这一套机制）
+    local function newBorder(parent, radius, thickness, inset, name)
+        local f = Instance.new("Frame")
+        f.Name = name or "YXGradientBorder"
+        f.Size = UDim2.new(1, -inset * 2, 1, -inset * 2)
+        f.Position = UDim2.fromOffset(inset, inset)
+        f.BackgroundTransparency = 1
+        f.BorderSizePixel = 0
+        f.Active = false                 -- 不挡点击
+        f.ZIndex = 999                  -- 盖在内容之上
+        f.Parent = parent
+
+        local c = Instance.new("UICorner")
+        c.CornerRadius = UDim.new(0, radius or 0)
+        c.Parent = f
+
+        local s = Instance.new("UIStroke")
+        s.Name = "GradientStroke"
+        s.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+        s.Thickness = thickness
+        s.Transparency = 0
+        s.Color = Color3.new(1, 1, 1)    -- 白基底仅用于让 UIGradient 完整显色，不是可见白色
+        s.Parent = f
+
+        local g = Instance.new("UIGradient")
+        g.Name = "BorderGradient"
+        g.Enabled = true
+        g.Color = buildSequence()
+        g.Rotation = 0
+        g.Parent = s
+
+        return { frame = f, corner = c, stroke = s, grad = g }
+    end
+
+
+
+
+
+    -- ========================================================
+    -- 窗口边框
+    -- ========================================================
+    function M:EnableWindow()
+        if winFrame and winFrame.Parent then return self end
+        local mf = getMainFrame()
+        if not mf then
+            warn("YXGradientBorder: 未找到 Library.Window.MainFrame，请在 CreateWindow 之后调用 Enable()")
+            return self
+        end
+
+        local b = newBorder(mf, M.Radius, M.Thickness, 0, M.Name)
+        winFrame, winCorner, winStroke, winGrad = b.frame, b.corner, b.stroke, b.grad
+        winStroke.Transparency = M.Transparency
+        M.Enabled = true
+        winLast = os.clock()
+
+        winConn = RunService.Heartbeat:Connect(function()
+            if not (winFrame and winFrame.Parent) then M:DisableWindow(); return end
+            local now = os.clock()
+            local dt = now - winLast
+            winLast = now
+            if not manualSeq then
+                local seq = buildSequence()
+                if seq ~= winLastSeq then winGrad.Color = seq; winLastSeq = seq end
+            end
+            local rot = (winGrad.Rotation + M.Speed * dt) % 360
+            winGrad.Rotation = rot
+            if M.Pulse then
+                winStroke.Thickness = M.Thickness + math.sin(now * 3) * 0.4
+            end
+        end)
+        return self
+    end
+
+    function M:DisableWindow()
+        if winConn then pcall(function() winConn:Disconnect() end); winConn = nil end
+        if winFrame then pcall(function() winFrame:Destroy() end) end
+        winFrame, winCorner, winStroke, winGrad = nil, nil, nil, nil
+        M.Enabled = false
+        return self
+    end
+
+    -- ========================================================
+    -- 标签页边框
+    -- ========================================================
+    local function buttonRadius(btn)
+        local r = M.Tabs.Radius
+        if type(r) == "number" then return r end
+        -- 库默认 TabButtonsStyle.CornerRadius = 0；跟随按钮自身 UICorner 最稳
+        local ok, c = pcall(function()
+            return btn.FindFirstChildOfClass and btn:FindFirstChildOfClass("UICorner")
+        end)
+        if ok and c and c.CornerRadius then return c.CornerRadius.Offset or 0 end
+        return 0
+    end
+
+    -- 收集当前所有标签目标（同时覆盖普通 Tab 与 KeyTab）
+    local function collectTargets()
+        local out = {}
+        if not (Library and type(Library.Tabs) == "table") then return out end
+        for _, tab in pairs(Library.Tabs) do
+            if type(tab) == "table" then
+                if tab.Button then
+                    out[#out + 1] = { tab = tab, obj = tab.Button, kind = "button" }
+                end
+                if M.Tabs.IncludeContent and tab.Container then
+                    out[#out + 1] = { tab = tab, obj = tab.Container, kind = "content" }
+                end
+            end
+        end
+        return out
+    end
+
+    -- 差量同步：新标签自动挂上，已销毁 / 不再需要的自动移除
+    local function syncTargets()
+        local seen = {}
+        for _, t in ipairs(collectTargets()) do
+            local obj = t.obj
+            seen[obj] = true
+            local item = tabItems[obj]
+            if not item then
+                local radius, thick
+                if t.kind == "button" then
+                    radius, thick = buttonRadius(obj), M.Tabs.Thickness
+                else
+                    radius, thick = M.Tabs.ContentRadius, M.Tabs.ContentThickness
+                end
+                item = newBorder(obj, radius, thick, 1, M.Tabs.Name)
+                item.kind = t.kind
+                tabItems[obj] = item
+            end
+            item.tab = t.tab   -- 选中态判断每次刷新
+        end
+        for obj, item in pairs(tabItems) do
+            if not seen[obj] then
+                pcall(function() item.frame:Destroy() end)
+                tabItems[obj] = nil
+            end
+        end
+    end
+
+    function M:EnableTabs()
+        if M.Tabs.Enabled then return self end
+        M.Tabs.Enabled = true
+        tabLast = os.clock()
+        scanAcc = 0
+        syncTargets()
+
+        tabConn = RunService.Heartbeat:Connect(function()
+            local now = os.clock()
+            local dt = now - tabLast
+            tabLast = now
+            local seq = buildSequence()
+            tabAngle = (tabAngle + M.Tabs.Speed * dt) % 360
+
+            -- 每 0.2s 扫一次新增/销毁的标签（切页无需每帧扫）
+            scanAcc = scanAcc + dt
+            if scanAcc >= 0.2 then scanAcc = 0; syncTargets() end
+
+            local activeTab = Library and Library.ActiveTab
+            local tabSeqChanged = (seq ~= tabLastSeq)
+            if tabSeqChanged then tabLastSeq = seq end
+            for obj, item in pairs(tabItems) do
+                if item.frame and item.frame.Parent then
+                    if tabSeqChanged then item.grad.Color = seq end
+                    item.grad.Rotation = tabAngle
+                    if item.kind == "button" then
+                        local active = (item.tab == activeTab)
+                        local show = active or not M.Tabs.OnlyActive
+                        item.stroke.Thickness = active
+                            and M.Tabs.ActiveThickness or M.Tabs.Thickness
+                        item.stroke.Transparency = show
+                            and (active and M.Tabs.ActiveTransparency
+                                       or M.Tabs.IdleTransparency)
+                            or 1
+                    else
+                        item.stroke.Thickness = M.Tabs.ContentThickness
+                        item.stroke.Transparency = 0
+                    end
+                end
+            end
+        end)
+        return self
+    end
+
+    function M:DisableTabs()
+        if tabConn then pcall(function() tabConn:Disconnect() end); tabConn = nil end
+        for obj, item in pairs(tabItems) do
+            pcall(function() item.frame:Destroy() end)
+            tabItems[obj] = nil
+        end
+        M.Tabs.Enabled = false
+        return self
+    end
+
+    -- ========================================================
+    -- 通知边框（流动渐变描边）
+    --   通知由 Library:Notify 动态创建、几秒后销毁，存在 Library.Notifications 里
+    --   （key = FakeBackground，value = Data，Data.Holder 是通知主体 Frame）。
+    --   因此照标签页那套做差量同步：每 0.2s 扫一次，新通知自动挂、销毁的自动清。
+    -- ========================================================
+    local function notifRadius(holder)
+        local r = M.Notifs.Radius
+        if type(r) == "number" then return r end
+        local ok, c = pcall(function()
+            return holder.FindFirstChildOfClass and holder:FindFirstChildOfClass("UICorner")
+        end)
+        if ok and c and c.CornerRadius then return c.CornerRadius.Offset or 0 end
+        return 0
+    end
+
+    local function collectNotifs()
+        local out = {}
+        if not (Library and type(Library.Notifications) == "table") then return out end
+        for _, Data in pairs(Library.Notifications) do
+            if type(Data) == "table" and Data.Holder then
+                local holder = Data.Holder
+                local ok, parent = pcall(function() return holder.Parent end)
+                if ok and parent then out[#out + 1] = holder end
+            end
+        end
+        return out
+    end
+
+    local function syncNotifs()
+        local seen = {}
+        for _, holder in ipairs(collectNotifs()) do
+            seen[holder] = true
+            local item = notifItems[holder]
+            if not item then
+                item = newBorder(holder, notifRadius(holder), M.Notifs.Thickness, 0, M.Notifs.Name)
+                item.stroke.Transparency = M.Notifs.Transparency
+                notifItems[holder] = item
+            end
+        end
+        for holder, item in pairs(notifItems) do
+            if not seen[holder] then
+                pcall(function() item.frame:Destroy() end)
+                notifItems[holder] = nil
+            end
+        end
+    end
+
+    function M:EnableNotifs()
+        if M.Notifs.Enabled then return self end
+        M.Notifs.Enabled = true
+        notifLast = os.clock()
+        notifScanAcc = 0
+        syncNotifs()
+        notifConn = RunService.Heartbeat:Connect(function()
+            local now = os.clock()
+            local dt = now - notifLast
+            notifLast = now
+            local seq = buildSequence()   -- 已按主题色缓存，不会每帧新建
+            notifAngle = (notifAngle + M.Notifs.Speed * dt) % 360
+            notifScanAcc = notifScanAcc + dt
+            if notifScanAcc >= 0.2 then notifScanAcc = 0; syncNotifs() end
+            local notifSeqChanged = (seq ~= notifLastSeq)
+            if notifSeqChanged then notifLastSeq = seq end
+            for _, item in pairs(notifItems) do
+                if item.frame and item.frame.Parent then
+                    if notifSeqChanged then item.grad.Color = seq end
+                    item.grad.Rotation = notifAngle
+                end
+            end
+        end)
+        return self
+    end
+
+    function M:DisableNotifs()
+        if notifConn then pcall(function() notifConn:Disconnect() end); notifConn = nil end
+        for holder, item in pairs(notifItems) do
+            pcall(function() item.frame:Destroy() end)
+            notifItems[holder] = nil
+        end
+        M.Notifs.Enabled = false
+        return self
+    end
+
+    -- ========================================================
+    -- 统一开关 + Setter
+    -- ========================================================
+    function M:Enable()
+        M:EnableWindow()
+        if M.Tabs.AutoEnable ~= false then M:EnableTabs() end
+        if M.Notifs.AutoEnable ~= false then M:EnableNotifs() end
+        return self
+    end
+
+    function M:Disable()
+        M:DisableNotifs()
+        M:DisableTabs()
+        M:DisableWindow()
+        return self
+    end
+
+    function M:SetColors(edge, mid)
+        -- 传 nil, nil 恢复「跟随主题强调色」的默认边框配色
+        if edge == nil and mid == nil then
+            manualSeq = nil
+            themeSig = nil      -- 强制下一轮按当前主题重建
+            themeCheckAt = 0
+        else
+            edge = edge or Color3.fromRGB(34, 211, 238)
+            mid  = mid  or edge
+            manualSeq = ColorSequence.new({
+                ColorSequenceKeypoint.new(0,   edge),
+                ColorSequenceKeypoint.new(0.5, mid),
+                ColorSequenceKeypoint.new(1,   edge),
+            })
+        end
+        local seq = buildSequence()
+        if winGrad then winGrad.Color = seq end
+        for _, item in pairs(tabItems) do
+            if item.grad then item.grad.Color = seq end
+        end
+        for _, item in pairs(notifItems) do
+            if item.grad then item.grad.Color = seq end
+        end
+        return self
+    end
+
+
+    function M:SetSpeed(v)   if type(v) == "number" then M.Speed = v end; return self end
+    function M:SetThickness(v)
+        if type(v) == "number" then
+            M.Thickness = v
+            if winStroke then winStroke.Thickness = v end
+        end
+        return self
+    end
+    function M:SetPulse(v)   M.Pulse = v and true or false; return self end
+
+    function M:SetTabSpeed(v)
+        if type(v) == "number" then M.Tabs.Speed = v end
+        return self
+    end
+    function M:SetTabThickness(idle, active)
+        if type(idle) == "number" then M.Tabs.Thickness = idle end
+        if type(active) == "number" then M.Tabs.ActiveThickness = active end
+        return self
+    end
+    function M:SetTabIdleTransparency(v)
+        if type(v) == "number" then M.Tabs.IdleTransparency = clamp01(v) end
+        return self
+    end
+    function M:SetTabRadius(v)
+        -- nil = 恢复自动跟随按钮自身 UICorner
+        M.Tabs.Radius = (type(v) == "number") and v or nil
+        if M.Tabs.Enabled then
+            for obj, item in pairs(tabItems) do
+                if item.kind == "button" and item.corner then
+                    item.corner.CornerRadius = UDim.new(0, buttonRadius(obj))
+                end
+            end
+        end
+        return self
+    end
+    function M:SetTabOnlyActive(v)
+        M.Tabs.OnlyActive = v and true or false
+        return self
+    end
+    function M:SetTabIncludeContent(v)
+        M.Tabs.IncludeContent = v and true or false
+        if M.Tabs.Enabled then syncTargets() end
+        return self
+    end
+    function M:SetNotifSpeed(v)
+        if type(v) == "number" then M.Notifs.Speed = v end
+        return self
+    end
+    function M:SetNotifThickness(v)
+        if type(v) == "number" then
+            M.Notifs.Thickness = v
+            if M.Notifs.Enabled then
+                for _, item in pairs(notifItems) do item.stroke.Thickness = v end
+            end
+        end
+        return self
+    end
+
+    return M
+end)(Library)
+
+-- [内嵌] YXGradientBorder:Enable() -> 已移至 YXStart() 统一启动
+-- ============================================================================
+-- 液态玻璃（移植自 SyndromeXph/Obsidian 新版库 Library.lua 的 "Liquid Glass"）
+--   库内位置：294-301 行配置 / 1593-1644 行 ApplyLiquidGlass + AddGlassSheen /
+--             1646-1681 行 SetWorldGlass / 1789-1821 行 Lighting 特效。
+--   本次按需求只采用其中两块，不做「世界模糊 / 压暗」（不创建 BlurEffect、
+--     ColorCorrectionEffect，也不改 Lighting）：
+--     1) AddGlassSheen    -> 窗口 MainFrame 上的斜向玻璃高光层（完全照搬库实现）
+--     2) ApplyLiquidGlass -> 窗口内 BackgroundColor / MainColor 面板半透明化
+--   当前主脚本用的是 deividcomsono 旧库，没有内建这些；ApplyLiquidGlass 原本挂在
+--   库内部 New() 上，外部拦不到，这里改成「低频扫描窗口后代 + 双路判定」近似复刻：
+--     · 路 A：读 Library.Registry[obj].BackgroundColor3 的键（与库原版判定一致）
+--     · 路 B：底色是否接近 Library.Scheme.BackgroundColor / MainColor
+--             （美化模块会改写部分 Registry 键，路 B 保证这种情况仍能命中）
+--   不碰窗口 MainFrame 本体：它自身保持不透明，半透过去也看不到效果。
+-- ============================================================================
+local YXLiquidGlass = (function(Library)
+    local M = {}
+
+    M.Glass = {
+        Enabled           = true,
+
+        -- 1) 面板半透明化 -------------------------------------------------
+        Transparency      = 0.5,   -- 与库 GlassTransparency 一致
+        IncludeMainFrame  = false, -- 窗口本体自身保持不透明，半透也看不到效果
+        OnlyOpaque        = true,  -- 只接管当前完全不透明的面板，不破坏控件自设透明度
+        ScanInterval      = 0.35,  -- 运行时新增控件（下拉 / 通知等）补扫间隔
+        ColorTolerance    = 0.08,  -- 主题底色近似匹配容差
+
+        -- 2) 窗口玻璃高光层 ---------------------------------------------
+        SheenEnabled      = true,
+        SheenName         = "YXLiquidGlassSheen",
+        SheenZIndex       = 0,     -- 与库一致；若被背景图压住可调到 990 左右
+        SheenRotation     = 112,   -- 库原版斜向角度
+        SheenColors       = { { 255, 255, 255 }, { 200, 214, 255 }, { 36, 42, 70 } },
+        SheenStops        = { 0, 0.4, 1 },
+        SheenTransparency = { { 0, 0.7 }, { 0.42, 0.88 }, { 1, 0.97 } },
+        SheenFollowTheme  = false, -- 玻璃反光是中性高光，默认不随主题；true 则混入主题强调色
+    }
+
+    local OkRun, RunService = pcall(function() return game:GetService("RunService") end)
+    local Heartbeat = (OkRun and RunService and RunService.Heartbeat) or nil
+
+    local Conn = nil
+    local Sheen, SheenCorner, SheenGrad = nil, nil, nil
+    local BoundMF, SheenSig = nil, nil
+    local Processed = setmetatable({}, { __mode = "k" })
+    local Origins   = setmetatable({}, { __mode = "k" })
+    local ScanAcc, LastFrame = 0, 0
+
+    local function GetMainFrame()
+        if not (Library and Library.Window) then return nil end
+        local mf = Library.Window.MainFrame
+        if mf and mf.Parent then return mf end
+        return nil
+    end
+
+    local function IsAlive(O)
+        if not O then return false end
+        local Ok, P = pcall(function() return O.Parent end)
+        return Ok and P ~= nil
+    end
+
+    -- 面板判定：Registry 键（库原版逻辑） + 当前底色接近主题 BackgroundColor / MainColor
+    local function IsPanel(Obj)
+        local Reg = Library.Registry and Library.Registry[Obj]
+        local Key = Reg and Reg.BackgroundColor3
+        if type(Key) == "function" then return true end
+        if type(Key) == "string" and (Key == "BackgroundColor" or Key == "MainColor") then
+            return true
+        end
+        local C, S = Obj.BackgroundColor3, Library.Scheme
+        if not (C and S) then return false end
+        local Tol = M.Glass.ColorTolerance or 0.08
+        for _, Name in ipairs({ "BackgroundColor", "MainColor" }) do
+            local T = S[Name]
+            if T and math.abs(C.R - T.R) < Tol
+                  and math.abs(C.G - T.G) < Tol
+                  and math.abs(C.B - T.B) < Tol then
+                return true
+            end
+        end
+        return false
+    end
+
+    -- 返回 true = 以后不用再判断这个对象；false = 属性还没就绪，下轮重试
+    local function ApplyOne(Obj, mf)
+        if Obj == mf and not M.Glass.IncludeMainFrame then return true end
+        if Obj == Sheen then return true end
+        local Ok, Handled = pcall(function()
+            -- 磨砂玻璃底是自造的「景」，必须保持不透明，不能被当面板半透明化
+            if string.find(Obj.Name or "", "YXGlassBackdrop", 1, true) then return true end
+            if not Obj:IsA("GuiObject") then return true end
+            local BT = Obj.BackgroundTransparency
+            if type(BT) ~= "number" then return false end
+            if BT >= 1 then return true end                       -- 本来就全透，跳过
+            if M.Glass.OnlyOpaque and BT > 0.01 then return true end -- 控件自设透明度，别动
+            if not IsPanel(Obj) then return true end
+            Origins[Obj] = BT
+            Obj.BackgroundTransparency = M.Glass.Transparency
+            return true
+        end)
+        return (Ok and Handled) or false
+    end
+
+    local function Scan()
+        local mf = GetMainFrame()
+        if not mf then return end
+        BoundMF = mf
+        pcall(function()
+            for _, Obj in ipairs(mf:GetDescendants()) do
+                if not Processed[Obj] then
+                    if ApplyOne(Obj, mf) then Processed[Obj] = true end
+                end
+            end
+        end)
+    end
+
+    local function BuildSheenColors()
+        local C = M.Glass.SheenColors
+        local function ToColor(T) return Color3.fromRGB(T[1], T[2], T[3]) end
+        local A, B, D = ToColor(C[1]), ToColor(C[2]), ToColor(C[3])
+        if M.Glass.SheenFollowTheme then
+            local Ok, RGB = pcall(function() return YXThemeAccentRGB(Library, true) end)
+            if Ok and RGB then
+                local Acc = Color3.new(RGB[1], RGB[2], RGB[3])
+                B = Color3.new((B.R + Acc.R) / 2, (B.G + Acc.G) / 2, (B.B + Acc.B) / 2)
+            end
+        end
+        return A, B, D
+    end
+
+    local function NewSheen(mf)
+        local G = M.Glass
+        local S = Instance.new("Frame")
+        S.Name = G.SheenName
+        S.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+        S.BackgroundTransparency = 0
+        S.BorderSizePixel = 0
+        S.Size = UDim2.fromScale(1, 1)
+        S.Active = false
+        S.ZIndex = G.SheenZIndex
+        S.Parent = mf
+
+        local Corner = Instance.new("UICorner")
+        Corner.CornerRadius = UDim.new(0, Library.CornerRadius or 4)
+        Corner.Parent = S
+        if type(Library.Corners) == "table" then
+            table.insert(Library.Corners, Corner)
+        end
+
+        local A, B, D = BuildSheenColors()
+        local St, Tr = G.SheenStops, G.SheenTransparency
+        local Grad = Instance.new("UIGradient")
+        Grad.Rotation = G.SheenRotation
+        Grad.Color = ColorSequence.new({
+            ColorSequenceKeypoint.new(St[1], A),
+            ColorSequenceKeypoint.new(St[2], B),
+            ColorSequenceKeypoint.new(St[3], D),
+        })
+        Grad.Transparency = NumberSequence.new({
+            NumberSequenceKeypoint.new(Tr[1][1], Tr[1][2]),
+            NumberSequenceKeypoint.new(Tr[2][1], Tr[2][2]),
+            NumberSequenceKeypoint.new(Tr[3][1], Tr[3][2]),
+        })
+        Grad.Parent = S
+        return S, Corner, Grad
+    end
+
+    local function RemoveSheen()
+        if SheenCorner and type(Library.Corners) == "table" then
+            for i = #Library.Corners, 1, -1 do
+                if Library.Corners[i] == SheenCorner then
+                    table.remove(Library.Corners, i)
+                end
+            end
+        end
+        if Sheen then pcall(function() Sheen:Destroy() end) end
+        Sheen, SheenCorner, SheenGrad = nil, nil, nil
+    end
+
+    local function Restore()
+        for Obj, Old in pairs(Origins) do
+            pcall(function() Obj.BackgroundTransparency = Old end)
+            Origins[Obj] = nil
+        end
+        Processed = setmetatable({}, { __mode = "k" })
+    end
+
+    local function ThemeSignature()
+        if not M.Glass.SheenFollowTheme then return nil end
+        local Ok, RGB = pcall(function() return YXThemeAccentRGB(Library, true) end)
+        if not (Ok and RGB) then return nil end
+        return string.format("%.3f,%.3f,%.3f", RGB[1], RGB[2], RGB[3])
+    end
+
+    local function Tick(dt)
+        if not M.Glass.Enabled then return end
+        local Now = os.clock()
+        local Step = (type(dt) == "number" and dt > 0 and dt) or (Now - LastFrame)
+        if Step < 0 then Step = 0 end
+        if Step > 0.2 then Step = 0.2 end
+        LastFrame = Now
+        ScanAcc = ScanAcc + Step
+        if ScanAcc < M.Glass.ScanInterval then return end
+        ScanAcc = 0
+
+        local mf = GetMainFrame()
+        if not mf then
+            RemoveSheen(); BoundMF = nil
+            return
+        end
+        if BoundMF ~= mf then               -- 窗口被重建
+            RemoveSheen()
+            Processed = setmetatable({}, { __mode = "k" })
+            Origins   = setmetatable({}, { __mode = "k" })
+            BoundMF = mf
+        end
+        if M.Glass.SheenEnabled and not IsAlive(Sheen) then
+            Sheen, SheenCorner, SheenGrad = NewSheen(mf)
+        elseif not M.Glass.SheenEnabled and IsAlive(Sheen) then
+            RemoveSheen()
+        end
+        Scan()
+        if SheenGrad and M.Glass.SheenFollowTheme then
+            local Sig = ThemeSignature()
+            if Sig and Sig ~= SheenSig then
+                SheenSig = Sig
+                local A, B, D = BuildSheenColors()
+                local St = M.Glass.SheenStops
+                pcall(function()
+                    SheenGrad.Color = ColorSequence.new({
+                        ColorSequenceKeypoint.new(St[1], A),
+                        ColorSequenceKeypoint.new(St[2], B),
+                        ColorSequenceKeypoint.new(St[3], D),
+                    })
+                end)
+            end
+        end
+    end
+
+    function M:Enable()
+        M.Glass.Enabled = true
+        if not Heartbeat or Conn then return self end
+        LastFrame = os.clock()
+        local Ok, C = pcall(function()
+            return Heartbeat:Connect(function(dt) pcall(Tick, dt) end)
+        end)
+        if Ok then Conn = C end
+        local mf = GetMainFrame()
+        if mf then
+            BoundMF = mf
+            if M.Glass.SheenEnabled then
+                Sheen, SheenCorner, SheenGrad = NewSheen(mf)
+            end
+            Scan()
+        end
+        return self
+    end
+
+    function M:Disable()
+        M.Glass.Enabled = false
+        if Conn then pcall(function() Conn:Disconnect() end); Conn = nil end
+        RemoveSheen()
+        Restore()
+        BoundMF, SheenSig = nil, nil
+        return self
+    end
+
+    function M:SetTransparency(V)
+        if type(V) == "number" then
+            M.Glass.Transparency = V
+            for Obj in pairs(Origins) do
+                pcall(function() Obj.BackgroundTransparency = V end)
+            end
+        end
+        return self
+    end
+
+    return M
+end)(Library)
+
+-- [内嵌] YXLiquidGlass:Enable() -> 已移至 YXStart() 统一启动
+-- ============================================================================
+-- 窗口内磨砂玻璃底   ——   「不碰游戏画面」版液态玻璃的「景」
+-- ----------------------------------------------------------------------------
+-- 【成因】库原版 Liquid Glass 是三件套：面板半透明 + 玻璃高光 + SetWorldGlass
+--   （Lighting 里的 BlurEffect 模糊 + ColorCorrectionEffect 压暗降饱和）。
+--   主脚本用的旧库没有这套，本模块此前只复刻了前两件。于是面板设成 0.5 半透明
+--   后，透出的是 MainFrame 那层【不透明的纯色底板】——两层几乎同色叠加，糊成一片、
+--   没层次、白字发灰、斜高光浮在表面像块灰塑料。库原版玻璃后面「有景」（模糊
+--   压暗的 3D 世界），所以通透、柔和、文字清晰。
+--
+-- 【本模块做法】完全不碰 Lighting / 游戏画面，在 MainFrame 内部、所有半透明面板
+--   之下，垫一层【不透明】的柔和磨砂渐变「景」，用两层不同角度的 UIGradient
+--   造出明暗层次与柔光带，模拟被模糊压暗的景物；玻璃后面就有东西可看了。
+--     · Base 层（-2）：不透明，4 关键点斜向渐变，主题底色 + 强调色混入 + 明暗起伏
+--     · Haze 层（-1）：另一角度的柔光带，靠 NumberSequence 两端隐、中部显
+--     · 两层都带 UICorner（跟随窗口圆角），Active=false 不挡点击
+--     · 名字统一含 YXGlassBackdrop：YXLiquidGlass 扫描会跳过（保持不透明），
+--       流光段的 SKIP_NAME 已含 "Backdrop" 也会跳过
+--     · 低频同步主题色 / 圆角 / 窗口重建 / 背景图互斥，不做每帧赋值
+--
+-- 【背景图互斥】库每帧把 ScreenGui 下那张 BackgroundImage(ImageTransparency≈0.75)
+--   的 Visible 设为 HasBackgroundImage and MainFrame.Visible。低频读它的 Visible
+--   即可知道开关状态：显示背景图 -> 隐藏磨砂底；关背景图 -> 显示磨砂底。
+--
+-- 【参数】全部在 M.Backdrop 配置表里，改数字即可，不需要 UI 开关 / 滑块。
+-- ============================================================================
+local YXGlassBackdrop = (function(Library)
+    local M = {}
+
+    M.Backdrop = {
+        Enabled        = true,
+        Name           = "YXGlassBackdrop",
+        HazeName       = "YXGlassBackdropHaze",
+        BaseZ          = -2,        -- 低于玻璃高光层 Sheen(ZIndex=0) 与所有内容
+        HazeZ          = -1,
+        Strength       = 1.0,       -- 磨砂层次总强度 0~2（0=接近纯色，越大越有景）
+        ThemeMix       = 0.30,      -- 混入主题强调色比例，造色相差异
+        LightLift      = 0.20,      -- 亮部提亮
+        DarkDrop       = 0.10,      -- 暗部压暗
+        HazeStrength   = 0.55,      -- 柔光斑明显度 0~1
+        Rotation       = 112,       -- 与库 AddGlassSheen 一致的斜向角度
+        HazeRotation   = -32,       -- 柔光带换个角度，叠出景深
+        SyncInterval   = 0.30,      -- 低频同步（主题 / 圆角 / 互斥 / 重建）
+        ExclusiveWithBackgroundImage = true,  -- 与「显示背景图」互斥
+    }
+
+    local OkRun, RunService = pcall(function() return game:GetService("RunService") end)
+    local Heartbeat = (OkRun and RunService and RunService.Heartbeat) or nil
+
+    local Conn, Started = nil, false
+    local BoundMF = nil
+    local Base, Haze, BaseGrad, HazeGrad, BaseCorner, HazeCorner = nil, nil, nil, nil, nil, nil
+    local Sig, Acc, Last = nil, 0, 0
+
+    local function Clamp01(v) return math.max(0, math.min(1, v)) end
+    local function Lerp(a, b, t) return a + (b - a) * t end
+    local function Mix(A, B, t)
+        return Color3.new(Lerp(A.R, B.R, t), Lerp(A.G, B.G, t), Lerp(A.B, B.B, t))
+    end
+    local function Shade(C, d)
+        return Color3.new(Clamp01(C.R + d), Clamp01(C.G + d), Clamp01(C.B + d))
+    end
+
+    local function GetMainFrame()
+        if not (Library and Library.Window) then return nil end
+        local mf = Library.Window.MainFrame
+        if mf and mf.Parent then return mf end
+        return nil
+    end
+
+    local function IsAlive(O)
+        if not O then return false end
+        local Ok, P = pcall(function() return O.Parent end)
+        return Ok and P ~= nil
+    end
+
+    local function ThemeColors()
+        local S = Library.Scheme or {}
+        local Bg = S.BackgroundColor or Color3.fromRGB(24, 27, 34)
+        local Ac = S.AccentColor or Color3.fromRGB(130, 200, 248)
+        return Bg, Ac
+    end
+
+    -- 4 关键点：暗 -> 亮(强调色) -> 次亮 -> 深蓝灰，形成柔和斜向明暗带
+    local function BuildBaseColor()
+        local Bg, Ac = ThemeColors()
+        local C = M.Backdrop
+        local K = C.Strength
+        local Deep = Color3.fromRGB(36, 42, 70)   -- 库 Sheen 的暗端色
+        local C0 = Shade(Mix(Bg, Ac, C.ThemeMix * 0.35), -C.DarkDrop * K)
+        local C1 = Shade(Mix(Bg, Ac, C.ThemeMix),         C.LightLift * K)
+        local C2 = Shade(Mix(Bg, Ac, C.ThemeMix * 0.18),  C.LightLift * 0.35 * K)
+        local C3 = Shade(Mix(Bg, Deep, 0.35),            -C.DarkDrop * 0.5 * K)
+        return ColorSequence.new({
+            ColorSequenceKeypoint.new(0,    C0),
+            ColorSequenceKeypoint.new(0.34, C1),
+            ColorSequenceKeypoint.new(0.68, C2),
+            ColorSequenceKeypoint.new(1,    C3),
+        })
+    end
+
+    -- 柔光带：两端几乎全隐、中部显，颜色白 -> 浅强调色 -> 白
+    local function BuildHazeColor()
+        local _, Ac = ThemeColors()
+        local W = Color3.new(1, 1, 1)
+        local Soft = Mix(W, Ac, 0.35)
+        return ColorSequence.new({
+            ColorSequenceKeypoint.new(0,   W),
+            ColorSequenceKeypoint.new(0.5, Soft),
+            ColorSequenceKeypoint.new(1,   W),
+        })
+    end
+    local function BuildHazeTrans()
+        local S = Clamp01(M.Backdrop.HazeStrength * M.Backdrop.Strength)
+        local Mid = 1 - 0.55 * S
+        return NumberSequence.new({
+            NumberSequenceKeypoint.new(0,   0.94),
+            NumberSequenceKeypoint.new(0.5, Mid),
+            NumberSequenceKeypoint.new(1,   0.94),
+        })
+    end
+
+    local function Radius()
+        return UDim.new(0, Library.CornerRadius or 12)
+    end
+
+    local function NewLayer(mf, Name, Z)
+        local F = Instance.new("Frame")
+        F.Name = Name
+        F.Size = UDim2.fromScale(1, 1)
+        F.Position = UDim2.fromScale(0, 0)
+        F.BorderSizePixel = 0
+        F.BackgroundTransparency = 0        -- 不透明：Base 挡住 3D 世界
+        F.BackgroundColor3 = Color3.new(1, 1, 1)
+        F.Active = false
+        F.Visible = true                    -- 首帧即显示，不等第一次同步
+        F.ZIndex = Z
+        F.Parent = mf
+
+        local Co = Instance.new("UICorner")
+        Co.CornerRadius = Radius()
+        Co.Parent = F
+
+        local G = Instance.new("UIGradient")
+        G.Enabled = true
+        G.Parent = F
+        return F, Co, G
+    end
+
+    local function DestroyLayers()
+        for _, O in ipairs({ Haze, Base }) do
+            if O then pcall(function() O:Destroy() end) end
+        end
+        Base, Haze, BaseGrad, HazeGrad, BaseCorner, HazeCorner = nil, nil, nil, nil, nil, nil
+    end
+
+    local function Build(mf)
+        DestroyLayers()
+        local Ok = pcall(function()
+            Base, BaseCorner, BaseGrad = NewLayer(mf, M.Backdrop.Name, M.Backdrop.BaseZ)
+            Haze, HazeCorner, HazeGrad = NewLayer(mf, M.Backdrop.HazeName, M.Backdrop.HazeZ)
+
+            BaseGrad.Rotation = M.Backdrop.Rotation
+            BaseGrad.Color = BuildBaseColor()
+
+            HazeGrad.Rotation = M.Backdrop.HazeRotation
+            HazeGrad.Color = BuildHazeColor()
+            HazeGrad.Transparency = BuildHazeTrans()
+        end)
+        if not Ok then DestroyLayers() end
+        return Ok
+    end
+
+    local function ApplyColors()
+        pcall(function()
+            if BaseGrad then
+                BaseGrad.Rotation = M.Backdrop.Rotation
+                BaseGrad.Color = BuildBaseColor()
+            end
+            if HazeGrad then
+                HazeGrad.Rotation = M.Backdrop.HazeRotation
+                HazeGrad.Color = BuildHazeColor()
+                HazeGrad.Transparency = BuildHazeTrans()
+            end
+        end)
+    end
+
+    local function ThemeSignature()
+        local Bg, Ac = ThemeColors()
+        return string.format("%.3f,%.3f,%.3f|%.3f,%.3f,%.3f|%.2f|%.2f|%.2f|%.2f|%.2f",
+            Bg.R, Bg.G, Bg.B, Ac.R, Ac.G, Ac.B,
+            M.Backdrop.Strength, M.Backdrop.ThemeMix,
+            M.Backdrop.LightLift, M.Backdrop.DarkDrop, M.Backdrop.HazeStrength)
+    end
+
+    -- 库每帧把 ScreenGui 下那张 ImageTransparency≈0.75 的 BackgroundImage
+    -- 的 Visible 设为 HasBackgroundImage and MainFrame.Visible。
+    local function LibBackgroundOn(Screen)
+        if not Screen then return false end
+        local Ok, Res = pcall(function()
+            for _, C in ipairs(Screen:GetChildren()) do
+                if C:IsA("ImageLabel")
+                   and not string.find(C.Name or "", "YX", 1, true)
+                   and C:FindFirstChildOfClass("UICorner") then
+                    local Tr = C.ImageTransparency
+                    if type(Tr) == "number" and math.abs(Tr - 0.75) < 0.02 then
+                        return C.Visible == true
+                    end
+                end
+            end
+            return false
+        end)
+        return (Ok and Res == true)
+    end
+
+    local function Tick(dt)
+        if not M.Backdrop.Enabled then return end
+        if Library.Unloaded then return end
+        local Now = os.clock()
+        local Step = (type(dt) == "number" and dt > 0 and dt) or (Now - Last)
+        if Step < 0 then Step = 0 end
+        if Step > 0.2 then Step = 0.2 end
+        Last = Now
+        Acc = Acc + Step
+        if Acc < M.Backdrop.SyncInterval then return end
+        Acc = 0
+
+        local mf = GetMainFrame()
+        if not mf then
+            DestroyLayers(); BoundMF = nil
+            return
+        end
+        if BoundMF ~= mf then            -- 窗口被重建
+            DestroyLayers()
+            BoundMF = mf
+        end
+        if not IsAlive(Base) or not IsAlive(Haze) then
+            Build(mf)
+        end
+
+        -- 主题 / 配置变化 -> 重建渐变（不做每帧赋值）
+        local S2 = ThemeSignature()
+        if S2 ~= Sig then
+            Sig = S2
+            ApplyColors()
+        end
+
+        -- 圆角跟随（UI 设置里的圆角滑块）
+        pcall(function()
+            local R = Radius()
+            if BaseCorner and BaseCorner.CornerRadius ~= R then BaseCorner.CornerRadius = R end
+            if HazeCorner and HazeCorner.CornerRadius ~= R then HazeCorner.CornerRadius = R end
+        end)
+
+        -- 与「显示背景图」互斥
+        local Show = true
+        if M.Backdrop.ExclusiveWithBackgroundImage then
+            Show = not LibBackgroundOn(mf.Parent)
+        end
+        pcall(function()
+            if Base then Base.Visible = Show end
+            if Haze then Haze.Visible = Show end
+        end)
+    end
+
+    function M:Enable()
+        M.Backdrop.Enabled = true
+        if not Heartbeat or Conn then return self end
+        Last = os.clock()
+        local Ok, C = pcall(function()
+            return Heartbeat:Connect(function(dt) pcall(Tick, dt) end)
+        end)
+        if Ok then Conn = C end
+        local mf = GetMainFrame()
+        if mf then
+            BoundMF = mf
+            Build(mf)
+            Sig = ThemeSignature()
+        end
+        return self
+    end
+
+    function M:Disable()
+        M.Backdrop.Enabled = false
+        if Conn then pcall(function() Conn:Disconnect() end); Conn = nil end
+        DestroyLayers()
+        BoundMF, Sig = nil, nil
+        return self
+    end
+
+    -- 运行时可调（参数写进配置表，不需要 UI 控件）
+    function M:SetStrength(V)          -- 磨砂层次总强度 0~2
+        if type(V) == "number" then M.Backdrop.Strength = math.max(0, math.min(2, V)); Sig = nil end
+        return self
+    end
+    function M:SetThemeMix(V)          -- 强调色混入比例 0~1
+        if type(V) == "number" then M.Backdrop.ThemeMix = Clamp01(V); Sig = nil end
+        return self
+    end
+    function M:SetHaze(V)              -- 柔光斑明显度 0~1
+        if type(V) == "number" then M.Backdrop.HazeStrength = Clamp01(V); Sig = nil end
+        return self
+    end
+    function M:SetExclusive(V)         -- 与背景图互斥 开/关
+        M.Backdrop.ExclusiveWithBackgroundImage = V and true or false
+        return self
+    end
+    function M:Refresh()
+        Sig = nil
+        return self
+    end
+
+    return M
+end)(Library)
+
+-- [内嵌] YXGlassBackdrop:Enable() -> 已移至 YXStart() 统一启动
+-- ============================================================================
+-- 指定 4 组文本 渐变流光   ——   算法 1:1 移植自新版库 Library.lua
+-- ============================================================================
+local YXLibTextFlow = (function(Library)
+    local M = {}
+
+    -- ---------------------- 可调配置 ----------------------
+    -- 【库 Library.lua 原生流光字参数对照】下面每项都与库一一对应，改这里 = 改库那个效果：
+    --   颜色常量  Violet(148,0,211) / SoftViolet(186,85,255) / PureBlack(0,0,0)   [318-320 行]
+    --   关键点    0 / 0.33 / 0.66 / 1                                             [330-333 行]
+    --   相位      0 / 1.2 / 2.4 / 3.6（步长 1.2）                                [325-328 行]
+    --   颜色速度  标题 os.clock()*0.25 / 页脚 *0.28 / 通知进度条 *0.35            [11053/11245/10715 行]
+    --   横向平移  页脚 (Clock*0.28)%2-1                                          [11246 行]
+    --   旋转摆动  页脚 sin(Clock*0.85)*16                                        [11247 行]
+    --   驱动      RenderStepped 每帧重建 ColorSequence + 每帧 TextColor3=白      [11049/11241 行]
+    -- 库把这些系数全部写死，这里提成参数；默认值 = 整体提亮 + 整体加速。
+    M.Enabled            = true
+
+    -- ===== 速度（默认约为库 2.7 倍，流光明显加快）=====
+    M.Speed              = 0.75      -- ① 颜色循环速度（库 0.25 / 0.28 / 0.35）
+    M.OffsetSpeed        = 0.75      -- ② 色带横向平移速度（库 0.28）
+    M.SwaySpeed          = 1.70      -- ③ 摆动角速度（库 0.85）
+    M.Sway               = 16        -- ④ 摆动幅度，单位度（库 16；0 = 不摆）
+    M.Interval           = 1/30      -- ⑤ 流光动画降频到 30fps（人眼对流动无感，CPU 直接减半）；
+                                     --    主题/扫描累加器仍每帧跑，响应不受影响。改 0 = 每帧。
+
+    -- ===== 波形（库 MakeVioletBlackGradient 的写死值，照搬为参数）=====
+    M.PhaseStep          = 1.2       -- ⑥ 相位步长：0 / 1.2 / 2.4 / 3.6
+    M.Key2               = 0.33      -- ⑦ 第 2 关键点位置
+    M.Key3               = 0.66      -- ⑧ 第 3 关键点位置
+
+    -- ===== 配色（库三色 + 整体提亮）=====
+    M.Brightness         = 0.62      -- ⑨ 整体亮度 0~1：0=强调色原色（偏暗），1=接近纯白
+                                     --    三档全部落在亮区间，暗端不再是纯黑/深蓝灰，
+                                     --    也不会出现固定纯白中点（"一暗一白"已中和）
+    M.UseLibraryPalette  = false     -- ⑩ true=切回库原版紫黑三色，便于和库逐帧对照
+
+    -- ===== 作用范围：所有标签页的 Name / Description / Icon / Tooltip =====
+    -- 【不再写死某几个文本】每次补扫都从库的数据结构动态收集：
+    --   Library.Tabs      （字典）→ 每个标签页的 Name / Description / Tooltip
+    --   Library.TabButtons（数组）→ 每个标签按钮的 .Label 名称文字 + .Icon 图标
+    -- 因此「所有标签页」自动覆盖，新增 / 改名标签页无需改配置。
+    -- 内容区顶部的当前标签名 / 描述、悬停 Tooltip 浮层，用文本白名单命中。
+    -- 其余所有文字与未登记图标一律【不挂渐变、不刷白基底】，交给主题色 Registry。
+    M.WindowTexts = {                          -- 窗口级固定文本（Title / Footer）
+        ["YX-Loader"] = true,
+        ["YX-Loader | 仍在开发中"] = true,
+    }
+    M.AutoTabs           = true    -- 自动收集所有标签页（关掉则只流光 WindowTexts）
+    M.IncludeTabName     = true    -- ① 标签页 Name
+    M.IncludeTabDesc     = true    -- ② 标签页 Description
+    M.IncludeTabIcon     = true    -- ③ 标签页 Icon（图片 / 字体图标都支持）
+    M.IncludeTabTooltip  = true    -- ④ 标签页 Tooltip（悬停浮层）
+    M.OnlyTabTooltips    = true    -- Tooltip 浮层为全局单例：只在显示「标签页提示」
+                                    -- 时流光，其它控件提示保持主题色（原色自动恢复）
+    M.ScanInterval       = 1.0     -- 动态补扫间隔（切换标签 / 通知 / 对话框）。
+                                    --   已靠 DescendantAdded 实时捕获新增元素，整树扫描
+                                    --   无需太频繁；从 0.5s 提到 1.0s，降低大 UI 下的周期卡顿。
+    M.ThemeInterval      = 0.3     -- 主题强调色重取间隔
+    M.TakeOverExisting   = true    -- 复用对象上已有的 UIGradient；一个 GuiObject 挂
+                                    -- 两条会互相打架，复用同一条才能真流动
+    M.WhiteBase          = true    -- 每帧强制白基底（库同款；相乘时白 = 恒等元）
+                                    -- 文本刷 TextColor3，图片图标刷 ImageColor3
+    M.KeepRichTextColor  = true    -- 含 <font color=...> 的文字保留内联色
+
+    -- ===== 本版新增：所有 Icon 的「液态玻璃 + 流光」=====
+    M.IncludeAllIcons    = true    -- 所有图标都流光（不再只限标签按钮 Icon）
+    M.IncludeFontIcons   = true    -- 连 lucide 字体图标（带 IconPadding）也一起
+    M.IconGlass          = true    -- 图标叠加液态玻璃 112° 斜向高光带
+    M.GlassRotation      = 112     -- 库 AddGlassSheen 原版角度
+    M.GlassSway          = 6       -- 高光带轻微摆动（度），0 = 固定
+    M.GlassMinTrans      = 0.00    -- 高光带两端透明度（0 = 完全清晰）
+    M.GlassMaxTrans      = 0.32    -- 高光带中部透明度（越大玻璃感越强、图标越淡）
+    M.GlassKey           = 0.42    -- 库 NumberSequence 的中间关键点位置
+
+    M.ExcludeWindowIcon  = true    -- ★ 窗口标题栏 Icon 不加流光 / 不加玻璃
+    M.WindowTitle        = "YX-Loader"          -- 用于识别 TitleHolder
+    M.WindowIconIds      = { "71400987113958" } -- 主脚本 CreateWindow 的 Icon id
+
+    M.IconMaxSize        = 128     -- 超过此边长视为大图 / 背景图 / 赞助码，跳过
+    M.SkipGuiRootImages  = false   -- 默认关：背景图靠上面的尺寸规则挡掉即可，
+                                   -- 避免误伤「直接挂在 ScreenGui 根下」的小图标
+
+    -- ---------------------- 内部状态 ----------------------
+    local FALLBACK_ACCENT = Color3.fromRGB(130, 200, 248)
+    -- 白基底（UIGradient 相乘时白 = 恒等元）：全局复用，避免每帧新建
+    local WHITE = Color3.new(1, 1, 1)
+
+    -- 脏标记：记录每个渐变上一次实际写出的 Rotation / Transparency，
+    --   值没变就跳过 Roblox 属性写（每帧省掉对全部目标的大量实例写入）。
+    local AppliedRot    = setmetatable({}, { __mode = "k" })
+    local AppliedTrans  = setmetatable({}, { __mode = "k" })
+
+    local OkRun, RunService = pcall(function() return game:GetService("RunService") end)
+    local Heartbeat = (OkRun and RunService and RunService.Heartbeat) or nil
+
+    local Targets   = setmetatable({}, { __mode = "k" })   -- [GuiObject] = UIGradient
+    local Seen      = setmetatable({}, { __mode = "k" })   -- 已判定过的对象
+    local FontTag   = setmetatable({}, { __mode = "k" })   -- 含 <font color> 的对象
+    local BoundRoot = setmetatable({}, { __mode = "k" })   -- 已挂 DescendantAdded 的根
+    local OrigColor = setmetatable({}, { __mode = "k" })   -- Tooltip 浮层原始文字色
+    local WantedText    = {}                               -- 文本白名单 [string]=true
+    local WantedInst    = setmetatable({}, { __mode = "k" }) -- 精确实例（Label / Icon）
+    local TabTooltipText = {}                              -- 所有标签 Tooltip 文本
+    local IconSet        = setmetatable({}, { __mode = "k" })  -- 图标目标（走玻璃参数）
+    local IconOrigColor  = setmetatable({}, { __mode = "k" })  -- 图标原始色，卸载时恢复
+    -- 白基底事件驱动：每个流光目标挂一个颜色变化监听，主题色回流瞬间立即重设白。
+    --   彻底取代旧版「每帧遍历全部目标读色+比较」的 AssertWhiteBase，平时零开销。
+    local WhiteConns     = setmetatable({}, { __mode = "k" })  -- [GuiObject] = RBXScriptConnection
+    local HolderCache    = setmetatable({}, { __mode = "k" })  -- [Parent] = 是否 TitleHolder
+    local GLASS_TRANS, CLEAR_TRANS = nil, nil
+
+    local Acc, ScanAcc, ThemeAcc = 0, 0, 0
+    -- 颜色序列按相位量化缓存，避免每帧 ~5 次表分配造成的 GC 压力
+    local LastSeq, LastSeqShift = nil, nil
+    local SEQ_STEP = 0.01
+    local Conn, Started, FirstFrame = nil, false, true
+
+    local function SafeGet(Object, Key)
+        local Ok, Value = pcall(function() return Object[Key] end)
+        if Ok then return Value end
+        return nil
+    end
+
+    local function IsTextObject(Object)
+        return Object:IsA("TextLabel") or Object:IsA("TextButton") or Object:IsA("TextBox")
+    end
+    local function IsImageObject(Object)
+        return Object:IsA("ImageLabel") or Object:IsA("ImageButton")
+    end
+    -- 库全局唯一的悬停提示浮层 TooltipLabel：ZIndex = 30（全库仅此一处）
+    local function IsTooltipLabel(Object)
+        return IsTextObject(Object) and SafeGet(Object, "ZIndex") == 30
+    end
+
+    -- 玻璃高光 / 背景 / 模糊 / 遮罩 等装饰层不参与
+    local SKIP_NAME = {
+        "YXLiquidGlassSheen", "YXLibFlowGradient", "Sheen", "Shadow",
+        "Blur", "Acrylic", "Backdrop", "Mask",
+    }
+    local function NameBlocked(Object)
+        local Name = Object.Name or ""
+        for _, Key in ipairs(SKIP_NAME) do
+            if string.find(Name, Key, 1, true) then return true end
+        end
+        return false
+    end
+
+    -- ---------------------- 本版新增：图标识别 / 窗口 Icon 排除 / 玻璃高光 ----------------------
+    -- 库的 lucide 字体图标 = 带 IconPadding(UIPadding) 的 TextLabel/TextButton
+    local function IsFontIcon(Object)
+        if not IsTextObject(Object) then return false end
+        local Ok, Pad = pcall(function() return Object:FindFirstChild("IconPadding") end)
+        return Ok and Pad ~= nil
+    end
+
+    -- 图标尺寸 / 全透明 / ScreenGui 根图层判定（大图、背景、赞助码不参与）
+    local function IsDecorative(Object)
+        local S = SafeGet(Object, "AbsoluteSize")
+        if S and type(S) == "table" or (S and type(S) == "userdata") then
+            local W, H = S.X, S.Y
+            if type(W) == "number" and type(H) == "number" then
+                if W == 0 and H == 0 then return true end   -- 尺寸未就绪，下轮再判
+                if math.max(W, H) > (M.IconMaxSize or 128) then return true end
+            end
+        end
+        if M.SkipGuiRootImages and Object.Parent == SafeGet(Library, "ScreenGui") then
+            return true
+        end
+        local T = IsImageObject(Object)
+            and SafeGet(Object, "ImageTransparency")
+            or  SafeGet(Object, "TextTransparency")
+        if T and T >= 0.99 then return true end
+        return false
+    end
+
+    -- ① 按图标 asset id 精确排除（最稳，不受布局影响）
+    local function MatchWindowIconId(Object)
+        local Img = SafeGet(Object, "Image")
+        if type(Img) ~= "string" or Img == "" then return false end
+        for _, Id in ipairs(M.WindowIconIds or {}) do
+            if string.find(Img, tostring(Id), 1, true) then return true end
+        end
+        return false
+    end
+
+    -- ② 按父级是 TitleHolder 兜底：该容器里有 UIListLayout + 窗口标题 TextLabel
+    local function IsTitleHolder(Parent)
+        if not Parent then return false end
+        local Cached = HolderCache[Parent]
+        if Cached ~= nil then return Cached end
+        local HasLayout, HasTitle = false, false
+        pcall(function()
+            for _, C in ipairs(Parent:GetChildren()) do
+                if C:IsA("UIListLayout") then HasLayout = true end
+                if C:IsA("TextLabel") and SafeGet(C, "Text") == M.WindowTitle then
+                    HasTitle = true
+                end
+            end
+        end)
+        local R = HasLayout and HasTitle
+        HolderCache[Parent] = R
+        return R
+    end
+
+    local function IsWindowIcon(Object)
+        if not M.ExcludeWindowIcon then return false end
+        if MatchWindowIconId(Object) then return true end
+        if IsTitleHolder(Object.Parent) then return true end
+        return false
+    end
+
+    -- 库 AddGlassSheen 的 NumberSequence（两端清晰、中部高光带半透）
+    local function BuildGlassTrans()
+        local A = math.max(0, math.min(1, M.GlassMinTrans or 0))
+        local B = math.max(A, math.min(1, M.GlassMaxTrans or 0.32))
+        local K = math.max(0.001, math.min(0.999, M.GlassKey or 0.42))
+        local Ok = pcall(function()
+            GLASS_TRANS = NumberSequence.new({
+                NumberSequenceKeypoint.new(0, A),
+                NumberSequenceKeypoint.new(K, B),
+                NumberSequenceKeypoint.new(1, A),
+            })
+            CLEAR_TRANS = NumberSequence.new(0)
+        end)
+        if not Ok then GLASS_TRANS, CLEAR_TRANS = nil, nil end
+    end
+
+    -- ---------------------- 配色（照抄库的 4 关键点 sin + Lerp 结构） ----------------------
+    local Pal = {}
+
+    local function ReadAccent()
+        local Ok, C = pcall(function()
+            return Library.Scheme and Library.Scheme.AccentColor
+        end)
+        if Ok and typeof(C) == "Color3" then return C end
+        return FALLBACK_ACCENT
+    end
+
+    local function BuildPalette()
+        if M.UseLibraryPalette then
+            -- 库 Library.lua 318-320 行三个颜色常量，数值逐字节一致
+            Pal.Dark = Color3.fromRGB(0, 0, 0)         -- PureBlackColor
+            Pal.Main = Color3.fromRGB(148, 0, 211)     -- VioletColor
+            Pal.Lite = Color3.fromRGB(186, 85, 255)    -- SoftVioletColor
+            return
+        end
+        local A = ReadAccent()
+        local White = Color3.new(1, 1, 1)
+        local B = math.max(0, math.min(1, M.Brightness))
+        -- 库的 Black/Violet/SoftViolet 三档 → "亮彩 / 浅色 / 高光" 三档：
+        -- 全部由强调色向白 Lerp，最低档也带 B*0.26 提亮，不再压向纯黑/深蓝灰。
+        -- 三档亮度约 0.16 / 0.45 / 0.82，四关键点在其间摆动 = 明亮且仍有流动对比。
+        Pal.Main = A:Lerp(White, B * 0.26)                    -- 强调色主体（最饱和）
+        Pal.Dark = A:Lerp(White, B * 0.72)                    -- 浅色底（取代纯黑）
+        Pal.Lite = A:Lerp(White, math.min(B + 0.20, 0.92))   -- 高光（接近白但留色相）
+    end
+
+    -- 库 MakeVioletBlackGradient / MakeVioletBlackSequence 原样结构：
+    --   c1 = Black:Lerp(Violet,      sin(t*2π)        ...)
+    --   c2 = SoftViolet:Lerp(Black,  sin(t*2π + 1.2)  ...)
+    --   c3 = Violet:Lerp(Black,      sin(t*2π + 2.4)  ...)
+    --   c4 = Black:Lerp(SoftViolet,  sin(t*2π + 3.6)  ...)
+    -- 相位步长 / 关键点位置 / 三色都改成上面的 M.* 参数，结构不变、每帧重建。
+    local TWO_PI = math.pi * 2
+    local function MakeGradient(Shift)
+        local t = Shift % 1
+        local P = M.PhaseStep
+        local S1 = (math.sin(t * TWO_PI)         + 1) * 0.5
+        local S2 = (math.sin(t * TWO_PI + P)     + 1) * 0.5
+        local S3 = (math.sin(t * TWO_PI + P * 2) + 1) * 0.5
+        local S4 = (math.sin(t * TWO_PI + P * 3) + 1) * 0.5
+        local D, V, L = Pal.Dark, Pal.Main, Pal.Lite
+        -- 夹一下，防止手改参数时关键点乱序导致整条渐变失效（pcall 会静默吞错，
+        -- 表现就是"又不流动了"）
+        local K2 = math.max(0.001, math.min(0.999, M.Key2))
+        local K3 = math.max(K2 + 0.001, math.min(0.999, M.Key3))
+        return ColorSequence.new({
+            ColorSequenceKeypoint.new(0,    D:Lerp(V, S1)),
+            ColorSequenceKeypoint.new(K2,   L:Lerp(D, S2)),
+            ColorSequenceKeypoint.new(K3,   V:Lerp(D, S3)),
+            ColorSequenceKeypoint.new(1,    D:Lerp(L, S4)),
+        })
+    end
+
+    -- ---------------------- 目标收集：所有标签页四要素 ----------------------
+    local function AddText(T)
+        if type(T) == "string" and T ~= "" then WantedText[T] = true end
+    end
+
+    -- 每次补扫重建：标签页可能运行时新增 / 改名，必须动态取，不能写死。
+    local function RebuildTargets()
+        pcall(BuildGlassTrans)          -- 玻璃高光带只构造一次
+        for K in pairs(WantedText) do WantedText[K] = nil end
+        for K in pairs(WantedInst) do WantedInst[K] = nil end
+        for K in pairs(TabTooltipText) do TabTooltipText[K] = nil end
+
+        -- ① 窗口 Title / Footer（固定文本，手填）
+        for K, V in pairs(M.WindowTexts or {}) do
+            if type(K) == "number" and type(V) == "string" then
+                AddText(V)                                 -- 数组写法 { "文本", ... }
+            elseif type(K) == "string" and V then
+                AddText(K)                                 -- 集合写法 ["文本"] = true
+            end
+        end
+
+        if not M.AutoTabs then return end
+
+        -- ② 所有标签页：Library.Tabs 是字典（TabKey -> Tab），必须用 pairs
+        pcall(function()
+            for _, Tab in pairs(Library.Tabs or {}) do
+                if type(Tab) == "table" then
+                    if M.IncludeTabName then AddText(Tab.Name) end
+                    if M.IncludeTabDesc then AddText(Tab.Description) end
+                    if M.IncludeTabTooltip and type(Tab.Tooltip) == "string" then
+                        AddText(Tab.Tooltip)               -- 也进白名单（双保险）
+                        TabTooltipText[Tab.Tooltip] = true
+                    end
+                end
+            end
+        end)
+
+        -- ③ 所有标签按钮：Library.TabButtons 是数组，每项含 .Label / .Icon
+        pcall(function()
+            for _, B in ipairs(Library.TabButtons or {}) do
+                if type(B) == "table" then
+                    if M.IncludeTabName and B.Label then
+                        WantedInst[B.Label] = true         -- Name 名称文字
+                        AddText(SafeGet(B.Label, "Text"))
+                    end
+                    if M.IncludeTabIcon and B.Icon then
+                        WantedInst[B.Icon] = true          -- Icon 图标实例
+                    end
+                end
+            end
+        end)
+    end
+
+    local function Eligible(Object)
+        if not M.Enabled or Seen[Object] then return false end
+        if NameBlocked(Object) then return false end
+
+        -- 父级链同判（避免玻璃高光容器下的东西被误挂）
+        local Parent, Depth = Object.Parent, 0
+        while Parent and Depth < 4 do
+            if NameBlocked(Parent) then return false end
+            Parent = Parent.Parent
+            Depth = Depth + 1
+        end
+
+        local IsText = IsTextObject(Object)
+        local IsIcon = IsImageObject(Object)
+        if not (IsText or IsIcon) then return false end
+
+        -- ① 全局 Tooltip 浮层（ZIndex=30）：单独放行，由 Tick 按内容决定亮灭
+        if IsTooltipLabel(Object) then
+            return M.IncludeTabTooltip and true or false
+        end
+
+        -- ② ★ 窗口 Icon 例外：优先级最高，流光 / 玻璃都不加
+        local IsFont = M.IncludeFontIcons and IsFontIcon(Object) or false
+        if (IsIcon or IsFont) and IsWindowIcon(Object) then return false end
+
+        -- ③ 精确实例：所有标签按钮的 Name 文字 / Icon 图标
+        if WantedInst[Object] then return true end
+
+        -- ④ ★ 本版新增：所有 Icon（图片图标 + lucide 字体图标）
+        --    窗口 Icon 已在 ② 排除；大图 / 背景 / 全透明由 IsDecorative 挡掉
+        if M.IncludeAllIcons and (IsIcon or IsFont) then
+            if IsDecorative(Object) then return false end
+            return true
+        end
+
+        -- ⑤ 文本白名单：内容区当前标签名 / 描述、窗口 Title / Footer、Tooltip 文案
+        if not IsText then return false end
+        local Tx = SafeGet(Object, "Text")
+        if type(Tx) ~= "string" or Tx == "" then return false end
+        if not WantedText[Tx] then return false end
+        local Tr = SafeGet(Object, "TextTransparency")
+        if Tr and Tr >= 0.99 then return false end          -- 全透明占位
+        return true
+    end
+
+    local function Attach(Object)
+        if not Eligible(Object) then return end
+        Seen[Object] = true
+
+        local Ok, Grad = pcall(function()
+            local G = Object:FindFirstChildOfClass("UIGradient")
+            if G then
+                -- 已有渐变：默认不动，避免与旧模块 SyncDynamicGradients 互相覆盖
+                if not M.TakeOverExisting then return nil end
+            else
+                G = Instance.new("UIGradient")
+                G.Name = "YXLibFlowGradient"
+                G.Rotation = 0
+                G.Parent = Object
+            end
+            return G
+        end)
+        if not Ok or not Grad then return end
+
+        Targets[Object] = Grad
+
+        local Tx = IsTextObject(Object) and SafeGet(Object, "Text") or nil
+        local HasFont = (Tx ~= nil and string.find(Tx, "<font", 1, true) ~= nil) or false
+        FontTag[Object] = HasFont
+
+        -- 白基底：挂上时一次性铺白（库每帧刷白的目的只是对抗主题色回流）。
+        --   含内联 <font color> 的富文本保留原色，跳过。
+        if M.WhiteBase and not (M.KeepRichTextColor and HasFont) then
+            pcall(function()
+                if IsImageObject(Object) then Object.ImageColor3 = WHITE
+                else Object.TextColor3 = WHITE end
+            end)
+            -- 事件驱动白基底：仅在主题色回流改写颜色时重设白，不再每帧遍历复核。
+            --   Tooltip 浮层由 Tick 按内容单独管理（非标签页提示要恢复主题色），不挂此监听。
+            if not IsTooltipLabel(Object) and not WhiteConns[Object] then
+                local Prop = IsImageObject(Object) and "ImageColor3" or "TextColor3"
+                local OkSig, Sig = pcall(function() return Object:GetPropertyChangedSignal(Prop) end)
+                if OkSig and Sig then
+                    local OkC, C = pcall(function()
+                        return Sig:Connect(function()
+                            if M.Enabled and Object[Prop] ~= WHITE then
+                                Object[Prop] = WHITE
+                            end
+                        end)
+                    end)
+                    if OkC and C then
+                        WhiteConns[Object] = C
+                        if Library and Library.GiveSignal then
+                            pcall(function() Library:GiveSignal(C) end)
+                        end
+                    end
+                end
+            end
+        end
+
+        -- 记录图标目标：Tick 里要走「液态玻璃高光」分支，卸载时恢复原始颜色
+        if IsImageObject(Object) or (M.IncludeFontIcons and IsFontIcon(Object)) then
+            IconSet[Object] = true
+            if IconOrigColor[Object] == nil then
+                IconOrigColor[Object] = IsImageObject(Object)
+                    and SafeGet(Object, "ImageColor3") or SafeGet(Object, "TextColor3")
+            end
+        end
+        -- 记下 Tooltip 浮层原本的文字色，显示非标签页提示时恢复
+        if IsTooltipLabel(Object) and OrigColor[Object] == nil then
+            OrigColor[Object] = SafeGet(Object, "TextColor3")
+        end
+    end
+
+    -- 白基底已改为事件驱动（Attach 里挂 GetPropertyChangedSignal），
+    --   主题色回流瞬间由监听回调重设白，不再需要每帧遍历复核。
+
+    -- ---------------------- 扫描范围 ----------------------
+    -- 主 ScreenGui + CoreGui 下所有以 "Obsidian" 开头的 ScreenGui
+    -- （下拉菜单 / 颜色选择器 / 对话框 / 通知等运行时新建的独立 ScreenGui 也能覆盖）
+    local function CollectRoots(Out)
+        local function Add(R)
+            if R and typeof(R) == "Instance" then
+                Out[#Out + 1] = R
+            end
+        end
+        Add(SafeGet(Library, "ScreenGui"))
+        Add(SafeGet(Library, "Floats"))
+        Add(SafeGet(Library, "KeybindFrame"))
+        local Ok, CoreGui = pcall(function() return game:GetService("CoreGui") end)
+        if Ok and CoreGui then
+            pcall(function()
+                for _, Child in ipairs(CoreGui:GetChildren()) do
+                    if Child:IsA("ScreenGui") and string.sub(Child.Name or "", 1, 8) == "Obsidian" then
+                        Add(Child)
+                    end
+                end
+            end)
+        end
+        return Out
+    end
+
+    local function Scan()
+        if Library.Unloaded then return end
+        RebuildTargets()                -- 标签页可能运行时新增，每次补扫重新收集
+        local Roots = CollectRoots({})
+        for _, Root in ipairs(Roots) do
+            if not BoundRoot[Root] then
+                BoundRoot[Root] = true
+                pcall(function()
+                    Library:GiveSignal(Root.DescendantAdded:Connect(function(Object)
+                        pcall(Attach, Object)
+                    end))
+                end)
+            end
+            pcall(function()
+                for _, Object in ipairs(Root:GetDescendants()) do
+                    pcall(Attach, Object)
+                end
+            end)
+            pcall(Attach, Root)
+        end
+    end
+
+    -- ---------------------- 每帧驱动（库同款：每帧重建 ColorSequence） ----------------------
+    -- WHITE 已在模块顶部统一定义（白基底恒等元），此处不再重复声明
+
+    local function Tick(dt)
+        if Library.Unloaded or not M.Enabled then return end
+
+        ThemeAcc = ThemeAcc + dt
+        if ThemeAcc >= M.ThemeInterval then
+            ThemeAcc = 0
+            pcall(BuildPalette)
+        end
+        ScanAcc = ScanAcc + dt
+        if ScanAcc >= M.ScanInterval then
+            ScanAcc = 0
+            pcall(Scan)
+        end
+
+        Acc = Acc + dt
+        -- 首帧强制执行（不等降频间隔），首帧立刻铺上流光，不闪
+        if not FirstFrame and M.Interval > 0 and Acc < M.Interval then return end
+        FirstFrame = false
+        Acc = 0
+
+        -- ★ 库的核心：每帧重新构造整个 ColorSequence，颜色本身在流动
+        local Clock = os.clock()
+        local Shift = Clock * M.Speed
+        -- 相位没推进够就不重建，省掉每帧 ~5 次表分配（肉眼无差，GC 压力大降）
+        if (LastSeqShift == nil) or (math.abs(Shift - LastSeqShift) >= SEQ_STEP) then
+            LastSeq = MakeGradient(Shift)
+            LastSeqShift = Shift
+        end
+        local Seq = LastSeq
+        local Off = Vector2.new((Clock * M.OffsetSpeed) % 2 - 1, 0)
+        local Rot = (M.Sway ~= 0) and (math.sin(Clock * M.SwaySpeed) * M.Sway) or 0
+
+        for Object, Grad in pairs(Targets) do
+            if Object.Parent == nil then
+                Targets[Object] = nil
+            else
+                pcall(function()
+                    -- ① Tooltip 浮层是全局单例：只在显示「标签页 Tooltip」时流光，
+                    --    其它控件的提示保持主题色，并恢复原始文字色。
+                    if M.OnlyTabTooltips and IsTooltipLabel(Object) then
+                        local Tx = SafeGet(Object, "Text")
+                        if not (type(Tx) == "string" and TabTooltipText[Tx]) then
+                            if Grad.Enabled then Grad.Enabled = false end
+                            if OrigColor[Object] ~= nil then
+                                Object.TextColor3 = OrigColor[Object]
+                            end
+                            return
+                        end
+                    end
+                    -- Tooltip 浮层显示「标签页提示」时需白基底才能正确流光；
+                    --   它全局只有一个实例，每帧写一次白基底开销可忽略
+                    --   （与「全部目标」每帧强刷白基底有本质区别）。
+                    if IsTooltipLabel(Object) then
+                        pcall(function() Object.TextColor3 = WHITE end)
+                    end
+                    -- ② 旧模块的 SyncDynamicGradients 每帧可能把复用的渐变
+                    --    Enabled 关掉，这里每帧最后写回 true，保证流光盖住它；
+                    --    只在它被改掉时才写，避免无谓的属性写。
+                    if not Grad.Enabled then Grad.Enabled = true end
+
+                    -- ③ 旋转 / 透明度：用脏标记（AppliedRot / AppliedTrans），
+                    --    值没变就跳过 Roblox 属性写。非玻璃目标这两项本就是常数，
+                    --    每目标只写一次；玻璃目标的透明度也是常数，只有旋转随摆动变。
+                    local nRot, nTrans
+                    if IconSet[Object] and M.IconGlass and GLASS_TRANS then
+                        -- 图标级液态玻璃：库 AddGlassSheen 的 112° 斜向高光带，
+                        -- 与每帧重建的流光 ColorSequence 叠在同一条 UIGradient 上
+                        -- （一个 GuiObject 只留一条渐变，绝不互抢）
+                        nRot   = (M.GlassRotation or 112)
+                                 + math.sin(Clock * M.SwaySpeed) * (M.GlassSway or 0)
+                        nTrans = GLASS_TRANS
+                    else
+                        nRot   = Rot
+                        nTrans = CLEAR_TRANS   -- 关玻璃 / 目标是文字时复位（可能为 nil）
+                    end
+                    if AppliedRot[Grad] ~= nRot then
+                        Grad.Rotation = nRot; AppliedRot[Grad] = nRot
+                    end
+                    if nTrans and AppliedTrans[Grad] ~= nTrans then
+                        Grad.Transparency = nTrans; AppliedTrans[Grad] = nTrans
+                    end
+
+                    -- ④ 颜色流光 + 横向平移：流动效果本身，仅在 30fps 降频帧写
+                    Grad.Color  = Seq
+                    Grad.Offset = Off
+                    -- ⑤ 白基底由 Attach 里的事件监听负责（主题回流即重设白），
+                    --    本循环完全不再触碰 TextColor3 / ImageColor3。
+                end)
+            end
+        end
+    end
+
+    -- ---------------------- 开关 ----------------------
+    function M:Enable()
+        M.Enabled = true
+        FirstFrame = true
+        pcall(BuildPalette)
+        pcall(Scan)
+        if not Started and Heartbeat then
+            Started = true
+            local Ok = pcall(function()
+                Conn = Heartbeat:Connect(function(dt) pcall(Tick, dt) end)
+                Library:GiveSignal(Conn)   -- 交给库统一断开，卸载不残留
+            end)
+            if not Ok then Started = false end
+        end
+        pcall(Tick, 0)   -- 首帧立刻铺上，不等第一个 Interval
+        return self
+    end
+
+    function M:Disable()
+        M.Enabled = false
+        if Conn then
+            pcall(function() Conn:Disconnect() end)
+            Conn, Started = nil, false
+        end
+        for Object, Grad in pairs(Targets) do
+            pcall(function()
+                if Grad.Name == "YXLibFlowGradient" then Grad:Destroy() end
+            end)
+            Targets[Object] = nil
+        end
+        -- 断开所有白基底事件监听
+        for Object, C in pairs(WhiteConns) do
+            pcall(function() C:Disconnect() end)
+            WhiteConns[Object] = nil
+        end
+        for K in pairs(Seen) do Seen[K] = nil end
+        for K in pairs(FontTag) do FontTag[K] = nil end
+        for K in pairs(WantedInst) do WantedInst[K] = nil end
+        for K in pairs(IconSet) do IconSet[K] = nil end
+        for K in pairs(HolderCache) do HolderCache[K] = nil end
+        -- 恢复图标被白基底改掉的原色（Registry 不一定登记 ImageColor3）
+        for Object, C in pairs(IconOrigColor) do
+            if C ~= nil then
+                pcall(function()
+                    if IsImageObject(Object) then Object.ImageColor3 = C
+                    else Object.TextColor3 = C end
+                end)
+            end
+            IconOrigColor[Object] = nil
+        end
+        for Object, C in pairs(OrigColor) do
+            pcall(function() Object.TextColor3 = C end)
+            OrigColor[Object] = nil
+        end
+        pcall(function() Library:UpdateColorsUsingRegistry() end)
+        return self
+    end
+
+    -- 运行时改配置（数值都对应上面的「库参数对照表」）
+    function M:SetSpeed(V)          -- 一键整体调速：颜色 / 平移 / 摆动按比例联动
+        if type(V) ~= "number" or V <= 0 then return self end
+        local R = V / 0.75
+        M.Speed       = V
+        M.OffsetSpeed = 0.75 * R
+        M.SwaySpeed   = 1.70 * R
+        return self
+    end
+    function M:SetBrightness(V)     -- 0=强调色原色（偏暗），1=接近纯白
+        if type(V) ~= "number" then return self end
+        M.Brightness = math.max(0, math.min(1, V))
+        pcall(BuildPalette)
+        return self
+    end
+    function M:SetPalette(UseLibrary)
+        M.UseLibraryPalette = UseLibrary and true or false
+        pcall(BuildPalette)
+        return self
+    end
+    function M:SetWindowTexts(T)    -- 运行时换窗口 Title / Footer
+        if type(T) ~= "table" then return self end
+        M.WindowTexts = T
+        pcall(RebuildTargets)
+        for K in pairs(Seen) do Seen[K] = nil end
+        pcall(Scan)
+        return self
+    end
+    M.SetTargets = M.SetWindowTexts   -- 兼容旧调用名
+
+    -- ===== 本版新增的运行时开关 =====
+    function M:SetAllIcons(V)           -- 所有图标流光 开/关
+        M.IncludeAllIcons = V and true or false
+        for K in pairs(Seen) do Seen[K] = nil end
+        pcall(Scan)
+        return self
+    end
+    function M:SetIconGlass(V)          -- 图标液态玻璃高光 开/关
+        M.IconGlass = V and true or false
+        if M.IconGlass then pcall(BuildGlassTrans) end
+        return self
+    end
+    function M:SetGlassStrength(V)      -- 玻璃感强度 0~1（0=清晰，1=很淡）
+        if type(V) ~= "number" then return self end
+        M.GlassMaxTrans = math.max(0, math.min(1, V))
+        pcall(BuildGlassTrans)
+        return self
+    end
+    function M:SetExcludeWindowIcon(V)  -- 窗口 Icon 排除 开/关
+        M.ExcludeWindowIcon = V and true or false
+        for K in pairs(HolderCache) do HolderCache[K] = nil end
+        for K in pairs(Seen) do Seen[K] = nil end
+        pcall(Scan)
+        return self
+    end
+
+    return M
+end)(Library)
+
+-- [内嵌] YXLibTextFlow:Enable() -> 已移至 YXStart() 统一启动
+-- ============================================================================
+
+-- ============================================================================
+-- YX 内嵌启动器：由 Library:CreateWindow 在窗口与标签页就绪后调用（仅一次）
+-- ============================================================================
+local YXStarted = false
+local function YXStart()
+    if YXStarted then return end
+    YXStarted = true
+    pcall(function() Bg:Enable() end)
+    pcall(function() YXGradientBorder:Enable() end)
+    pcall(function() YXLiquidGlass:Enable() end)
+    pcall(function() YXGlassBackdrop:Enable() end)
+    pcall(function() YXLibTextFlow:Enable() end)
+end
+
+local function YXStop()
+    pcall(function() YXLibTextFlow:Disable() end)
+    pcall(function() YXGlassBackdrop:Disable() end)
+    pcall(function() YXLiquidGlass:Disable() end)
+    pcall(function() YXGradientBorder:Disable() end)
+    pcall(function() Bg:Disable() end)
+end
+table.insert(Library.UnloadSignals, YXStop)
+
+-- 暴露控制接口：主脚本可用 Library.YX.* 运行时调整，或 Library.YX.Background:SetThemeManager(tm)
+Library.YX = {
+    Background = Bg,
+    Border     = YXGradientBorder,
+    Glass      = YXLiquidGlass,
+    Backdrop   = YXGlassBackdrop,
+    TextFlow   = YXLibTextFlow,
+    Start      = YXStart,
+    Stop       = YXStop,
+}
+
 function Library:CreateWindow(WindowInfo)
     WindowInfo = Library:Validate(WindowInfo, Templates.Window)
     local ViewportSize: Vector2 = workspace.CurrentCamera.ViewportSize
@@ -10794,6 +15243,7 @@ function Library:CreateWindow(WindowInfo)
     local BackgroundImage
     local HasBackgroundImage = false
     local BottomBackground
+    local BottomBackgroundCorner
     local FooterLabel
     local TopBar
     local WindowSnapConfig = {
@@ -10806,12 +15256,239 @@ function Library:CreateWindow(WindowInfo)
     local InitialLeftWidth = math.ceil(WindowInfo.Size.X.Offset * 0.3)
     local IsCompact = WindowInfo.SidebarCompacted
     local LastExpandedWidth = InitialLeftWidth
+    local RefreshWindowTitleSize
 
     do
-        Library.KeybindFrame, Library.KeybindContainer = Library:AddDraggableMenu("Keybinds")
-        Library.KeybindFrame.AnchorPoint = Vector2.new(0, 0.5)
-        Library.KeybindFrame.Position = UDim2.new(0, 6, 0.5, 0)
-        Library.KeybindFrame.Visible = false
+        local KeybindFrame, KeybindContainer, _, KeybindDivider, KeybindLabelPadding = Library:AddDraggableMenu("Keybinds")
+        KeybindFrame.AnchorPoint = Vector2.new(0, 0.5)
+        KeybindFrame.Position = UDim2.new(0, 6, 0.5, 0)
+        KeybindFrame.Visible = false
+        KeybindLabelPadding.PaddingRight = UDim.new(0, 34)
+
+        local HeaderButtons = New("Frame", {
+            AnchorPoint = Vector2.new(1, 0.5),
+            AutomaticSize = Enum.AutomaticSize.X,
+            BackgroundTransparency = 1,
+            Position = UDim2.new(1, -8, 0, 17),
+            Size = UDim2.fromOffset(0, 22),
+            ZIndex = 2,
+            Parent = KeybindFrame,
+        })
+        New("UIListLayout", {
+            FillDirection = Enum.FillDirection.Horizontal,
+            HorizontalAlignment = Enum.HorizontalAlignment.Right,
+            VerticalAlignment = Enum.VerticalAlignment.Center,
+            Padding = UDim.new(0, 4),
+            Parent = HeaderButtons,
+        })
+
+        local SettingsButton = Library:CreateIcon(SettingsIcon, {
+            ImageColor3 = "FontColor",
+            LayoutOrder = 1,
+            Size = UDim2.fromOffset(18, 18),
+            Visible = false,
+            ZIndex = 2,
+            Parent = HeaderButtons,
+        }, true)
+
+        local CollapseButton = Library:CreateIcon(ArrowIcon, {
+            ImageColor3 = "FontColor",
+            LayoutOrder = 2,
+            Rotation = 180,
+            Size = UDim2.fromOffset(18, 18),
+            ZIndex = 2,
+            Parent = HeaderButtons,
+        }, true)
+
+        local SettingsFrame, SettingsContainer, _, _, SettingsLabelPadding = Library:AddDraggableMenu("Visible Keybinds")
+        SettingsFrame.Visible = false
+        SettingsLabelPadding.PaddingRight = UDim.new(0, 34)
+
+        local CloseSettingsButton = Library:CreateIcon(CloseIcon, {
+            AnchorPoint = Vector2.new(1, 0.5),
+            ImageColor3 = "FontColor",
+            Position = UDim2.new(1, -8, 0, 17),
+            Size = UDim2.fromOffset(18, 18),
+            ZIndex = 2,
+            Parent = SettingsFrame,
+        }, true)
+
+        local KeybindMenu = {
+            VisibilityControl = false,
+            Collapsed = false,
+            SettingsOpen = false,
+            Frame = KeybindFrame,
+            Container = KeybindContainer,
+            SettingsFrame = SettingsFrame,
+            SettingsContainer = SettingsContainer,
+        }
+
+        function KeybindMenu:RefreshSettings()
+            for _, Child in SettingsContainer:GetChildren() do
+                if Child:IsA("GuiObject") and not Child:IsA("UIListLayout") and not Child:IsA("UIPadding") then
+                    Child:Destroy()
+                end
+            end
+
+            for Idx, Option in Options do
+                if Option.Type ~= "KeyPicker" or Option.NoUI == true then
+                    continue
+                end
+
+                local Holder = New("TextButton", {
+                    BackgroundTransparency = 1,
+                    Size = UDim2.new(1, 0, 0, 16),
+                    Text = "",
+                    Parent = SettingsContainer,
+                })
+
+                local Visible = Option.MenuVisible ~= false
+                New("TextLabel", {
+                    AutomaticSize = Enum.AutomaticSize.X,
+                    BackgroundTransparency = 1,
+                    Position = UDim2.fromOffset(22, 0),
+                    Size = UDim2.fromScale(0, 1),
+                    Text = ("[%s] %s (%s)"):format(
+                        Option.DisplayValue or Option.Value or "None",
+                        Option.Text or tostring(Idx),
+                        Option.Mode or "Toggle"
+                    ),
+                    TextSize = 14,
+                    TextTransparency = Visible and 0 or 0.5,
+                    Parent = Holder,
+                })
+
+                local Checkbox = New("Frame", {
+                    AnchorPoint = Vector2.new(0, 0.5),
+                    BackgroundColor3 = "MainColor",
+                    Position = UDim2.fromScale(0, 0.5),
+                    Size = UDim2.fromOffset(14, 14),
+                    Parent = Holder,
+                })
+                table.insert(
+                    Library.Corners,
+                    New("UICorner", {
+                        CornerRadius = UDim.new(0, Library.CornerRadius / 2),
+                        Parent = Checkbox,
+                    })
+                )
+                New("UIStroke", {
+                    Color = "OutlineColor",
+                    Parent = Checkbox,
+                })
+
+                Library:CreateIcon(CheckIcon, {
+                    ImageColor3 = "FontColor",
+                    ImageTransparency = Visible and 0 or 1,
+                    Position = UDim2.fromOffset(2, 2),
+                    Size = UDim2.new(1, -4, 1, -4),
+                    Parent = Checkbox,
+                })
+
+                Holder.MouseButton1Click:Connect(function()
+                    local Picker = Options[Idx]
+                    if not (Picker and Picker.Type == "KeyPicker" and Picker.SetMenuVisibility) then
+                        return
+                    end
+
+                    Picker:SetMenuVisibility(Picker.MenuVisible == false)
+                end)
+            end
+        end
+
+        function KeybindMenu:SetCollapsed(Collapsed: boolean)
+            Collapsed = Collapsed == true
+            KeybindMenu.Collapsed = Collapsed
+
+            KeybindContainer.Visible = not Collapsed
+            KeybindDivider.Visible = not Collapsed
+
+            if Collapsed then
+                local Width = math.max(160, KeybindFrame.AbsoluteSize.X / Library.DPIScale)
+                KeybindFrame.AutomaticSize = Enum.AutomaticSize.None
+                KeybindFrame.Size = UDim2.fromOffset(Width, 34)
+                CollapseButton.Rotation = 0
+            else
+                KeybindFrame.AutomaticSize = Enum.AutomaticSize.XY
+                KeybindFrame.Size = UDim2.fromOffset(0, 0)
+                CollapseButton.Rotation = 180
+            end
+        end
+
+        function KeybindMenu:ToggleCollapsed()
+            KeybindMenu:SetCollapsed(not KeybindMenu.Collapsed)
+        end
+
+        function KeybindMenu:SetSettingsOpen(Open: boolean)
+            Open = Open == true
+            if Open and not KeybindMenu.VisibilityControl then
+                return
+            end
+
+            KeybindMenu.SettingsOpen = Open
+            SettingsFrame.Visible = Open
+
+            if Open then
+                KeybindMenu:RefreshSettings()
+
+                local Bounds = Floats.AbsoluteSize
+                local Pos = KeybindFrame.AbsolutePosition - Floats.AbsolutePosition
+                local Size = KeybindFrame.AbsoluteSize
+                local SettingsSize = SettingsFrame.AbsoluteSize
+
+                local X = Pos.X + Size.X + 8
+                if X + SettingsSize.X > Bounds.X then
+                    X = Pos.X - SettingsSize.X - 8
+                end
+
+                SettingsFrame.Position = UDim2.fromOffset(
+                    math.clamp(X, 0, math.max(0, Bounds.X - SettingsSize.X)),
+                    math.clamp(Pos.Y, 0, math.max(0, Bounds.Y - SettingsSize.Y))
+                )
+            end
+        end
+
+        function KeybindMenu:ToggleSettings()
+            KeybindMenu:SetSettingsOpen(not KeybindMenu.SettingsOpen)
+        end
+
+        function KeybindMenu:SetVisibilityControl(Enabled: boolean)
+            Enabled = Enabled == true
+            KeybindMenu.VisibilityControl = Enabled
+            SettingsButton.Visible = Enabled
+            KeybindLabelPadding.PaddingRight = UDim.new(0, Enabled and 56 or 34)
+
+            if not Enabled then
+                KeybindMenu:SetSettingsOpen(false)
+            end
+        end
+
+        function KeybindMenu:Destroy()
+            local DraggableIndex = table.find(Library.DraggableElements, SettingsFrame)
+            if DraggableIndex then
+                table.remove(Library.DraggableElements, DraggableIndex)
+            end
+
+            SettingsFrame:Destroy()
+            KeybindMenu.SettingsFrame = nil
+            KeybindMenu.SettingsContainer = nil
+            KeybindMenu.SettingsOpen = false
+            Library.KeybindMenu = nil
+        end
+
+        SettingsButton.MouseButton1Click:Connect(function()
+            KeybindMenu:ToggleSettings()
+        end)
+        CollapseButton.MouseButton1Click:Connect(function()
+            KeybindMenu:ToggleCollapsed()
+        end)
+        CloseSettingsButton.MouseButton1Click:Connect(function()
+            KeybindMenu:SetSettingsOpen(false)
+        end)
+
+        Library.KeybindFrame = KeybindFrame
+        Library.KeybindContainer = KeybindContainer
+        Library.KeybindMenu = KeybindMenu
 
         MainFrame = New("TextButton", {
             BackgroundColor3 = function()
@@ -10864,9 +15541,7 @@ function Library:CreateWindow(WindowInfo)
             Visible = false,
             Parent = ScreenGui,
         })
-        if BackgroundIcon then
-            Library:ApplyLucideIcon(BackgroundImage, BackgroundIcon)
-        end
+        FillInstance(ImageContent(BackgroundIcon), BackgroundImage)
 
         table.insert(
             Library.Corners,
@@ -10925,14 +15600,10 @@ function Library:CreateWindow(WindowInfo)
         })
 
         if WindowInfo.Icon then
-            local Icon = Library:GetCustomIcon(WindowInfo.Icon)
-            WindowIcon = New("ImageLabel", {
+            WindowIcon = Library:CreateIcon(Library:GetCustomIcon(WindowInfo.Icon), {
                 Size = WindowInfo.IconSize,
                 Parent = TitleHolder,
             })
-            if Icon then
-                Library:ApplyLucideIcon(WindowIcon, Icon)
-            end
         else
             WindowIcon = New("TextLabel", {
                 BackgroundTransparency = 1,
@@ -10944,19 +15615,28 @@ function Library:CreateWindow(WindowInfo)
             })
         end
 
-        local X = Library:GetTextBounds(
-            WindowInfo.Title,
-            Library.Scheme.Font,
-            20,
-            (TitleHolder.AbsoluteSize.X / Library.DPIScale) - (WindowInfo.Icon and WindowInfo.IconSize.X.Offset + 6 or 0) - 12
-        )
         WindowTitle = New("TextLabel", {
             BackgroundTransparency = 1,
-            Size = UDim2.new(0, X, 1, 0),
+            Size = UDim2.fromOffset(0, 0),
             Text = WindowInfo.Title,
             TextSize = 20,
+            TextTruncate = Enum.TextTruncate.AtEnd,
+            TextXAlignment = Enum.TextXAlignment.Left,
+            TextYAlignment = Enum.TextYAlignment.Center,
             Parent = TitleHolder,
         })
+
+        RefreshWindowTitleSize = function()
+            local IconWidth = 0
+            if WindowIcon and WindowIcon.Visible then
+                IconWidth = WindowIcon.Size.X.Offset + 6
+            end
+
+            local MaxWidth = math.max(0, (TitleHolder.AbsoluteSize.X / Library.DPIScale) - IconWidth - 12)
+            local NaturalWidth = Library:GetTextBounds(WindowTitle.Text, Library.Scheme.Font, WindowTitle.TextSize)
+            WindowTitle.Size = UDim2.new(0, math.min(NaturalWidth, MaxWidth), 1, 0)
+        end
+        RefreshWindowTitleSize()
 
         --// Top Right Bar \\--
         RightWrapper = New("Frame", {
@@ -11071,18 +15751,17 @@ function Library:CreateWindow(WindowInfo)
 
         local SearchIcon = Library:GetIcon("search")
         if SearchIcon then
-            local SearchIconImage = New("ImageLabel", {
+            Library:CreateIcon(SearchIcon, {
                 ImageColor3 = "FontColor",
                 ImageTransparency = 0.5,
                 Size = UDim2.fromScale(1, 1),
                 SizeConstraint = Enum.SizeConstraint.RelativeYY,
                 Parent = SearchBox,
             })
-            Library:ApplyLucideIcon(SearchIconImage, SearchIcon)
         end
 
         if MoveIcon then
-            local MoveIconImage = New("ImageLabel", {
+            Library:CreateIcon(MoveIcon, {
                 AnchorPoint = Vector2.new(1, 0.5),
                 ImageColor3 = "OutlineColor",
                 Position = UDim2.new(1, -10, 0.5, 0),
@@ -11090,19 +15769,28 @@ function Library:CreateWindow(WindowInfo)
                 SizeConstraint = Enum.SizeConstraint.RelativeYY,
                 Parent = TopBar,
             })
-            Library:ApplyLucideIcon(MoveIconImage, MoveIcon)
         end
 
         --// Bottom Bar \\--
+        local BottomClip = New("Frame", {
+            AnchorPoint = Vector2.new(0, 1),
+            BackgroundTransparency = 1,
+            ClipsDescendants = true,
+            Position = UDim2.fromScale(0, 1),
+            Size = UDim2.new(1, 0, 0, 20),
+            ZIndex = 3,
+            Parent = MainFrame,
+        })
+
         BottomBackground = New("Frame", {
             AnchorPoint = Vector2.new(0, 1),
             BackgroundColor3 = function()
                 return Library:GetBetterColor(Library.Scheme.BackgroundColor, 4)
             end,
             Position = UDim2.fromScale(0, 1),
-            Size = UDim2.new(1, 0, 0, 20 + WindowInfo.CornerRadius),
+            Size = UDim2.new(1, 0, 0, math.max(20, WindowInfo.CornerRadius * 2)),
             ZIndex = 3,
-            Parent = MainFrame
+            Parent = BottomClip,
         })
         Library:MakeLine(MainFrame, {
             AnchorPoint = Vector2.new(0, 1),
@@ -11119,13 +15807,13 @@ function Library:CreateWindow(WindowInfo)
             ZIndex = 4,
             Parent = MainFrame,
         })
-        table.insert(
-            Library.Corners,
-            New("UICorner", {
-                CornerRadius = UDim.new(0, WindowInfo.CornerRadius),
-                Parent = BottomBackground,
-            })
-        )
+        BottomBackgroundCorner = New("UICorner", {
+            TopLeftRadius = UDim.new(0, 0),
+            TopRightRadius = UDim.new(0, 0),
+            BottomLeftRadius = UDim.new(0, WindowInfo.CornerRadius),
+            BottomRightRadius = UDim.new(0, WindowInfo.CornerRadius),
+            Parent = BottomBackground,
+        })
 
         --// Footer \\-
         FooterLabel = New("TextLabel", {
@@ -11156,16 +15844,13 @@ function Library:CreateWindow(WindowInfo)
             end)
         end
 
-        local WindowResizeIcon = New("ImageLabel", {
+        Library:CreateIcon(ResizeIcon, {
             ImageColor3 = "FontColor",
             ImageTransparency = 0.5,
             Position = UDim2.fromOffset(2, 2),
             Size = UDim2.new(1, -4, 1, -4),
             Parent = ResizeButton,
         })
-        if ResizeIcon then
-            Library:ApplyLucideIcon(WindowResizeIcon, ResizeIcon)
-        end
 
         --// Tabs \\--
         Tabs = New("ScrollingFrame", {
@@ -11173,6 +15858,7 @@ function Library:CreateWindow(WindowInfo)
             BackgroundColor3 = "BackgroundColor",
             CanvasSize = UDim2.fromScale(0, 0),
             Position = UDim2.fromOffset(0, 49),
+            ScrollBarImageTransparency = 1,
             ScrollBarThickness = 0,
             Size = UDim2.new(0, InitialLeftWidth, 1, -70),
             Parent = MainFrame,
@@ -11230,6 +15916,11 @@ function Library:CreateWindow(WindowInfo)
 
         WindowTitle.Text = title
         WindowInfo.Title = title
+        RefreshWindowTitleSize()
+    end
+
+    function Window:RefreshTitleSize()
+        RefreshWindowTitleSize()
     end
 
     function Window:SetBackgroundImage(Image: string)
@@ -11241,7 +15932,7 @@ function Library:CreateWindow(WindowInfo)
             if BackgroundIcon then
                 ValidIcon = true
 
-                Library:ApplyLucideIcon(BackgroundImage, BackgroundIcon)
+                FillInstance(ImageContent(BackgroundIcon), BackgroundImage)
             elseif Image:match("http://") or Image:match("https://") then
                 local RawFileName = Image:match("(.+)%..+$")
                 local _, Domain = Image:match("^(https?://)([^/]+)");
@@ -11270,18 +15961,14 @@ function Library:CreateWindow(WindowInfo)
                             CustomImageManager.DownloadAsset(FileName, true)
                         end
 
-                        BackgroundImage.Image = CustomImageManager.GetAsset(FileName)
-                        BackgroundImage.ImageRectOffset = Vector2.zero
-                        BackgroundImage.ImageRectSize = Vector2.zero
+                        FillInstance(ImageContent({ Url = CustomImageManager.GetAsset(FileName) }), BackgroundImage)
                     end
                 end
             end
         end
 
         if not ValidIcon then
-            BackgroundImage.Image = ""
-            BackgroundImage.ImageRectOffset = Vector2.zero
-            BackgroundImage.ImageRectSize = Vector2.zero
+            FillInstance(ImageContent(nil), BackgroundImage)
         end
 
         HasBackgroundImage = ValidIcon
@@ -11346,8 +16033,14 @@ function Library:CreateWindow(WindowInfo)
         Library.CornerRadius = Radius
         WindowInfo.CornerRadius = Radius
 
-        ResizeButton.Position = UDim2.new(1, -Radius / 4, 0, 0)
-        BottomBackground.Size = UDim2.new(1, 0, 0, 20 + Radius)
+        if ResizeButton then
+            ResizeButton.Position = UDim2.new(1, -Radius / 4, 0, 0)
+        end
+        if BottomBackgroundCorner then
+            BottomBackground.Size = UDim2.new(1, 0, 0, math.max(20, Radius * 2))
+            BottomBackgroundCorner.BottomLeftRadius = RadiusUDim
+            BottomBackgroundCorner.BottomRightRadius = RadiusUDim
+        end
 
         for _, Menu in Library.ContextMenus do
             if Menu.Destroyed then
@@ -11481,6 +16174,8 @@ function Library:CreateWindow(WindowInfo)
         if WindowInfo.EnableCompacting then
             ApplyCompact()
         end
+    
+        RefreshWindowTitleSize()
         if not IsCompact then
             LastExpandedWidth = Width
         end
@@ -11488,7 +16183,8 @@ function Library:CreateWindow(WindowInfo)
 
     function Window:ShowTabInfo(Name, Description)
         CurrentTabLabel.Text = Name
-        CurrentTabDescription.Text = Description
+        CurrentTabDescription.Text = Description or ""
+        CurrentTabDescription.Visible = typeof(Description) == "string" and Description ~= ""
 
         if IsDefaultSearchbarSize then
             SearchBox.Size = UDim2.fromScale(0.5, 1)
@@ -11503,12 +16199,13 @@ function Library:CreateWindow(WindowInfo)
         end
     end
 
-    function Window:AddTab(...)
+    local function CreateTab(ParentTab, ...)
         local Name = nil
         local Icon = nil
         local Description = nil
         local Tooltip = nil
         local Order = nil
+        local HasSubTabs = false
 
         if select("#", ...) == 1 and typeof(...) == "table" then
             local Info = select(1, ...)
@@ -11517,6 +16214,7 @@ function Library:CreateWindow(WindowInfo)
             Description = Info.Description
             Tooltip = Info.Tooltip
             Order = Info.Order
+            HasSubTabs = Info.SubTabs == true and ParentTab == nil
         else
             Name = select(1, ...)
             Icon = select(2, ...)
@@ -11525,11 +16223,14 @@ function Library:CreateWindow(WindowInfo)
         end
 
         if not tonumber(Order) then
-            Order = #Tabs:GetChildren()
+            Order = if ParentTab then ParentTab.SubTabCount + 1 else #Tabs:GetChildren()
         end
+
+        local TabKey = if ParentTab then ParentTab.Name .. "/" .. Name else Name
 
         local TabButton: TextButton
         local TabIndicator
+        local TabStroke
         local TabLabel
         local TabIcon
 
@@ -11537,8 +16238,72 @@ function Library:CreateWindow(WindowInfo)
         local TabLeft
         local TabRight
 
+        local SubTabBar
+        local SubTabHolder
+
         Icon = Library:GetCustomIcon(Icon)
-        do
+        if ParentTab then
+            TabButton = New("TextButton", {
+                AutomaticSize = Enum.AutomaticSize.X,
+                BackgroundColor3 = "MainColor",
+                LayoutOrder = Order,
+                Size = UDim2.fromScale(0, 1),
+                Text = "",
+                Parent = ParentTab.SubTabBar,
+            })
+            table.insert(
+                Library.Corners,
+                New("UICorner", {
+                    CornerRadius = UDim.new(0, Library.CornerRadius / 2),
+                    Parent = TabButton,
+                })
+            )
+
+            TabStroke = New("UIStroke", {
+                Color = "OutlineColor",
+                Parent = TabButton,
+            })
+            Library:AddToRegistry(TabStroke, {
+                Color = function()
+                    return if ParentTab.ActiveSubTab and ParentTab.ActiveSubTab.Button == TabButton then Library.Scheme.AccentColor else Library.Scheme.OutlineColor
+                end,
+            })
+
+            New("UIPadding", {
+                PaddingLeft = UDim.new(0, 8),
+                PaddingRight = UDim.new(0, 8),
+                Parent = TabButton,
+            })
+            New("UIListLayout", {
+                FillDirection = Enum.FillDirection.Horizontal,
+                HorizontalAlignment = Enum.HorizontalAlignment.Center,
+                Padding = UDim.new(0, 6),
+                SortOrder = Enum.SortOrder.LayoutOrder,
+                VerticalAlignment = Enum.VerticalAlignment.Center,
+                Parent = TabButton,
+            })
+
+            if Icon then
+                TabIcon = Library:CreateIcon(Icon, {
+                    ImageColor3 = Icon.Custom and "WhiteColor" or "AccentColor",
+                    ImageTransparency = 0.5,
+                    LayoutOrder = 1,
+                    Size = UDim2.fromOffset(16, 16),
+                    Parent = TabButton,
+                })
+            end
+
+            TabLabel = New("TextLabel", {
+                AutomaticSize = Enum.AutomaticSize.X,
+                BackgroundTransparency = 1,
+                LayoutOrder = 2,
+                Size = UDim2.fromOffset(0, 16),
+                Text = Name,
+                TextSize = 14,
+                TextTransparency = 0.5,
+                Parent = TabButton,
+            })
+        else
             TabButton = New("TextButton", {
                 BackgroundColor3 = "MainColor",
                 BackgroundTransparency = 1,
@@ -11593,15 +16358,13 @@ function Library:CreateWindow(WindowInfo)
             })
 
             if Icon then
-                TabIcon = New("ImageLabel", {
+                TabIcon = Library:CreateIcon(Icon, {
                     ImageColor3 = Icon.Custom and "WhiteColor" or "AccentColor",
                     ImageTransparency = 0.5,
-                    ScaleType = Enum.ScaleType.Fit,
                     Size = UDim2.fromScale(1, 1),
                     SizeConstraint = IsCompact and Enum.SizeConstraint.RelativeXY or Enum.SizeConstraint.RelativeYY,
                     Parent = ButtonHolder,
                 })
-                Library:ApplyLucideIcon(TabIcon, Icon)
             end
 
             table.insert(Library.TabButtons, {
@@ -11609,16 +16372,55 @@ function Library:CreateWindow(WindowInfo)
                 Padding = ButtonPadding,
                 Icon = TabIcon,
             })
+        end
 
-            --// Tab Container \\--
-            TabContainer = New("Frame", {
+        --// Tab Container \\--
+        TabContainer = New("Frame", {
+            BackgroundTransparency = 1,
+            Position = UDim2.fromScale(0, 0),
+            Size = UDim2.fromScale(1, 1),
+            Visible = false,
+            Parent = if ParentTab then ParentTab.SubTabHolder else Container,
+        })
+
+        if HasSubTabs then
+            SubTabBar = New("ScrollingFrame", {
+                AutomaticCanvasSize = Enum.AutomaticSize.X,
                 BackgroundTransparency = 1,
-                Position = UDim2.fromScale(0, 0),
-                Size = UDim2.fromScale(1, 1),
-                Visible = false,
-                Parent = Container,
+                CanvasSize = UDim2.fromScale(0, 0),
+                Position = UDim2.fromOffset(2, 5),
+                ScrollBarThickness = 0,
+                ScrollingDirection = Enum.ScrollingDirection.X,
+                Size = UDim2.new(1, -4, 0, 30),
+                Parent = TabContainer,
+            })
+            New("UIListLayout", {
+                FillDirection = Enum.FillDirection.Horizontal,
+                Padding = UDim.new(0, 8),
+                SortOrder = Enum.SortOrder.LayoutOrder,
+                Parent = SubTabBar,
+            })
+            New("UIPadding", {
+                PaddingBottom = UDim.new(0, 3),
+                PaddingLeft = UDim.new(0, 1),
+                PaddingRight = UDim.new(0, 1),
+                PaddingTop = UDim.new(0, 3),
+                Parent = SubTabBar,
             })
 
+            Library:MakeLine(TabContainer, {
+                Position = UDim2.fromOffset(-6, 40),
+                Size = UDim2.new(1, 12, 0, 1),
+            })
+
+            SubTabHolder = New("Frame", {
+                BackgroundTransparency = 1,
+                ClipsDescendants = true,
+                Position = UDim2.fromOffset(0, 41),
+                Size = UDim2.new(1, 0, 1, -41),
+                Parent = TabContainer,
+            })
+        else
             TabLeft = New("ScrollingFrame", {
                 AutomaticCanvasSize = Enum.AutomaticSize.Y,
                 BackgroundTransparency = 1,
@@ -11700,6 +16502,9 @@ function Library:CreateWindow(WindowInfo)
             Destroyed = false,
 
             Window = Window,
+            ParentTab = ParentTab,
+            IsSubTab = ParentTab ~= nil,
+
             Button = TabButton,
             Container = TabContainer,
             Sides = {
@@ -11717,6 +16522,16 @@ function Library:CreateWindow(WindowInfo)
             Groupboxes = {},
             Tabboxes = {},
             DependencyGroupboxes = {},
+
+            --// Sub Tabs \\--
+            HasSubTabs = HasSubTabs,
+            SubTabBar = SubTabBar,
+            SubTabHolder = SubTabHolder,
+
+            SubTabs = {},
+            SubTabCount = 0,
+            ActiveSubTab = nil,
+            PreviousSubTab = nil,
         }
 
         --// Warning Box \\--
@@ -11825,7 +16640,7 @@ function Library:CreateWindow(WindowInfo)
 
             New("UIStroke", {
                 ApplyStrokeMode = Enum.ApplyStrokeMode.Contextual,
-                Color = "DarkColor",
+                Color = GetTextStrokeColor,
                 LineJoinMode = Enum.LineJoinMode.Miter,
                 Parent = WarningText,
             })
@@ -11833,6 +16648,10 @@ function Library:CreateWindow(WindowInfo)
 
         --// Tab Handlers \\--
         function Tab:UpdateWarningBox(Info)
+            if HasSubTabs then
+                error(string.format("Tab '%s' uses SubTabs, update the warning box of a subtab instead", Name))
+            end
+
             if typeof(Info.IsNormal) == "boolean" then
                 Tab.WarningBox.IsNormal = Info.IsNormal
             end
@@ -11862,12 +16681,25 @@ function Library:CreateWindow(WindowInfo)
         end
 
         function Tab:RefreshSides()
-            local Offset = WarningBoxHolder.Visible and WarningBox.Size.Y.Offset + 8 or 0
-            for _, Side in Tab.Sides do
-                Side.Position = UDim2.new(Side.Position.X.Scale, 0, 0, Offset)
-                Side.Size = UDim2.new(0.5, -3, 1, -Offset)
+            if HasSubTabs then
+                if Tab.ActiveSubTab then
+                    Tab.ActiveSubTab:RefreshSides()
+                end
+
+                return
             end
+
+            local Offset = WarningBoxHolder.Visible and WarningBox.Size.Y.Offset + 8 or 0
+            local Width = TabContainer.AbsoluteSize.X / Library.DPIScale
+            local LeftWidth = math.floor(Width / 2 - 3)
+
+            TabLeft.Position = UDim2.fromOffset(0, Offset)
+            TabLeft.Size = UDim2.new(0, LeftWidth, 1, -Offset)
+
+            TabRight.Position = UDim2.new(1, 0, 0, Offset)
+            TabRight.Size = UDim2.new(0, Width - LeftWidth - 6, 1, -Offset)
         end
+        table.insert(Tab.Connections, TabContainer:GetPropertyChangedSignal("AbsoluteSize"):Connect(function() Tab:RefreshSides() end))
 
         function Tab:Resize(ResizeWarningBox: boolean?)
             if ResizeWarningBox then
@@ -11897,6 +16729,7 @@ function Library:CreateWindow(WindowInfo)
         local function AddTabbox(self, Info)
             Info = Library:Validate(Info, Templates.Tabbox)
             local ParentObj = self
+            local IsNested = ParentObj.Type == "Groupbox" or ParentObj.Type == "SubTab"
 
             if typeof(Info.Side) == "string" then
                 local lowerSide = string.lower(Info.Side)
@@ -11911,7 +16744,7 @@ function Library:CreateWindow(WindowInfo)
                 AutomaticSize = Enum.AutomaticSize.Y,
                 BackgroundTransparency = 1,
                 Size = UDim2.fromScale(1, 0),
-                Parent = if ParentObj.Type == "Groupbox" then ParentObj.Container else (Info.Side == 1 and TabLeft or TabRight),
+                Parent = if IsNested then ParentObj.Container else (Info.Side == 1 and TabLeft or TabRight),
             })
             New("UIListLayout", {
                 Padding = UDim.new(0, 6),
@@ -11965,12 +16798,13 @@ function Library:CreateWindow(WindowInfo)
 
                 Visible = true,
                 ActiveTab = nil,
+                MaxHeight = Info.MaxHeight,
 
                 BoxHolder = BoxHolder,
                 Holder = TabboxHolder,
                 Tabs = {},
 
-                ParentBox = if ParentObj.Type == "Groupbox" then ParentObj else nil,
+                ParentBox = if IsNested then ParentObj else nil,
             }
 
             function Tabbox:UpdateCorners()
@@ -11985,7 +16819,17 @@ function Library:CreateWindow(WindowInfo)
                 end
             end
 
-            function Tabbox:AddTab(Name, IconName)
+            function Tabbox:SetMaxHeight(MaxHeight: number?)
+                if MaxHeight ~= nil then
+                    assert(typeof(MaxHeight) == "number", "MaxHeight must be a number or nil")
+                    assert(MaxHeight > 0, "MaxHeight must be higher than 0")
+                end
+
+                Tabbox.MaxHeight = MaxHeight
+                Tabbox:Resize()
+            end
+
+            function Tabbox:AddTab(Name, IconName, MaxHeight)
                 TotalTabs = TotalTabs + 1
                 local TabIndex = TotalTabs
 
@@ -12032,13 +16876,12 @@ function Library:CreateWindow(WindowInfo)
                 local ButtonIcon
                 local BoxIcon = Library:GetCustomIcon(IconName)
                 if BoxIcon then
-                    ButtonIcon = New("ImageLabel", {
+                    ButtonIcon = Library:CreateIcon(BoxIcon, {
                         ImageColor3 = BoxIcon.Custom and "WhiteColor" or "AccentColor",
                         ImageTransparency = 0.5,
                         Size = IsNameEmpty and UDim2.fromOffset(16, 16) or UDim2.fromOffset(18, 18),
                         Parent = ButtonContent,
                     })
-                    Library:ApplyLucideIcon(ButtonIcon, BoxIcon)
                 end
 
                 local ButtonLabel
@@ -12061,12 +16904,14 @@ function Library:CreateWindow(WindowInfo)
                 })
 
                 local Container = New("ScrollingFrame", {
-                    AutomaticCanvasSize = Enum.AutomaticSize.Y,
+                    AutomaticCanvasSize = Enum.AutomaticSize.None,
                     BackgroundTransparency = 1,
                     BorderSizePixel = 0,
-                    CanvasSize = UDim2.fromScale(0, 0),
+                    CanvasSize = UDim2.fromOffset(0, 0),
                     Position = UDim2.fromOffset(0, 35),
+                    ScrollBarImageTransparency = 1,
                     ScrollBarThickness = 0,
+                    ScrollingEnabled = false,
                     Size = UDim2.new(1, 0, 1, -35),
                     Visible = false,
                     Parent = TabboxHolder,
@@ -12084,7 +16929,9 @@ function Library:CreateWindow(WindowInfo)
                 })
 
                 local Tab = {
+                    Type = "SubTab",
                     Name = Name,
+                    MaxHeight = MaxHeight,
 
                     Connections = {},
                     Destroyed = false,
@@ -12111,7 +16958,7 @@ function Library:CreateWindow(WindowInfo)
                         ButtonLabel.TextTransparency = 0
                     end
                     if ButtonIcon then
-                        ButtonIcon.ImageTransparency = 0
+                        SetIconProperties(ButtonIcon, { ImageTransparency = 0 })
                     end
 
                     Line.Visible = false
@@ -12130,7 +16977,7 @@ function Library:CreateWindow(WindowInfo)
                         ButtonLabel.TextTransparency = 0.5
                     end
                     if ButtonIcon then
-                        ButtonIcon.ImageTransparency = 0.5
+                        SetIconProperties(ButtonIcon, { ImageTransparency = 0.5 })
                     end
                     Line.Visible = true
                     Container.Visible = false
@@ -12144,14 +16991,32 @@ function Library:CreateWindow(WindowInfo)
                     end
 
                     local ContentSize = (List.AbsoluteContentSize.Y / Library.DPIScale) + 14
+                    local FrameSize = ContentSize
+                    local TabMaxHeight = Tab.MaxHeight or Tabbox.MaxHeight
                     if Tabbox.PoppedOut then
-                        ContentSize = math.min(ContentSize, GetPopOutBodyMaxHeight(Tabbox, 35))
+                        FrameSize = math.min(ContentSize, GetPopOutBodyMaxHeight(Tabbox, 35))
+                    elseif typeof(TabMaxHeight) == "number" then
+                        FrameSize = math.min(ContentSize, math.max(TabMaxHeight - 35, 0))
                     end
 
-                    TabboxHolder.Size = UDim2.new(1, 0, 0, ContentSize + 35)
-                    if ParentObj.Type == "Groupbox" then
+                    local NeedsScroll = ContentSize > FrameSize + 1
+                    Container.CanvasSize = UDim2.fromOffset(0, if NeedsScroll then ContentSize else 0)
+                    Container.ScrollingEnabled = NeedsScroll
+                    TabboxHolder.Size = UDim2.new(1, 0, 0, FrameSize + 35)
+
+                    if IsNested then
                         ParentObj:Resize()
                     end
+                end
+
+                function Tab:SetMaxHeight(NewMaxHeight: number?)
+                    if NewMaxHeight ~= nil then
+                        assert(typeof(NewMaxHeight) == "number", "MaxHeight must be a number or nil")
+                        assert(NewMaxHeight > 0, "MaxHeight must be higher than 0")
+                    end
+
+                    Tab.MaxHeight = NewMaxHeight
+                    Tab:Resize()
                 end
 
                 function Tab:UpdateCorners()
@@ -12198,6 +17063,7 @@ function Library:CreateWindow(WindowInfo)
 
                 Button.MouseButton1Click:Connect(Tab.Show)
 
+                Tab.AddTabbox = AddTabbox
                 setmetatable(Tab, BaseGroupbox)
 
                 Tabbox.Tabs[TabStoringIndex] = Tab
@@ -12220,7 +17086,7 @@ function Library:CreateWindow(WindowInfo)
                     if Tabbox.ActiveTab then
                         Tabbox.ActiveTab:Resize()
                     end
-                    if ParentObj.Type == "Groupbox" then
+                    if IsNested then
                         ParentObj:Resize()
                     end
                 end,
@@ -12263,7 +17129,13 @@ function Library:CreateWindow(WindowInfo)
             return Tabbox
         end
 
-        Tab.AddTabbox = AddTabbox
+        Tab.AddTabbox = function(self, Info)
+            if HasSubTabs then
+                error(string.format("Tab '%s' uses SubTabs, add tabboxes to a subtab instead", Name))
+            end
+
+            return AddTabbox(self, Info)
+        end
 
         --// Deprecated - Use Tab:AddTabbox instead.
         function Tab:AddLeftTabbox(Name)
@@ -12276,6 +17148,10 @@ function Library:CreateWindow(WindowInfo)
         end
 
         function Tab:AddGroupbox(Info)
+            if HasSubTabs then
+                error(string.format("Tab '%s' uses SubTabs, add groupboxes to a subtab instead", Name))
+            end
+
             Info = Library:Validate(Info, Templates.Groupbox)
 
             if typeof(Info.Side) == "string" then
@@ -12293,7 +17169,7 @@ function Library:CreateWindow(WindowInfo)
                 Size = UDim2.fromScale(1, 0),
                 Parent = (Info.Side == 1) and TabLeft or TabRight,
             })
-            New("UIListLayout", {
+            local BoxHolderList = New("UIListLayout", {
                 Padding = UDim.new(0, 6),
                 Parent = BoxHolder,
             })
@@ -12349,14 +17225,13 @@ function Library:CreateWindow(WindowInfo)
 
                 local BoxIcon = Library:GetCustomIcon(Info.IconName)
                 if BoxIcon then
-                    local GroupboxHeaderIcon = New("ImageLabel", {
+                    Library:CreateIcon(BoxIcon, {
                         AnchorPoint = Vector2.new(0, 0.5),
                         ImageColor3 = BoxIcon.Custom and "WhiteColor" or "AccentColor",
                         Position = UDim2.fromScale(0, 0.5),
                         Size = UDim2.fromOffset(22, 22),
                         Parent = GroupboxTop,
                     })
-                    Library:ApplyLucideIcon(GroupboxHeaderIcon, BoxIcon)
                 end
 
                 local RightInset = if Info.DisableCollapsing ~= true then 22 else 0
@@ -12406,18 +17281,15 @@ function Library:CreateWindow(WindowInfo)
                     Parent = TextsFrame,
                 })
 
-                GroupboxCollapseArrow = New("ImageButton", {
+                GroupboxCollapseArrow = Library:CreateIcon(ArrowIcon, {
                     Visible = Info.DisableCollapsing ~= true,
                     AnchorPoint = Vector2.new(1, 0.5),
-                    BackgroundTransparency = 1,
                     ImageColor3 = "WhiteColor",
                     Position = UDim2.fromScale(1, 0.5),
+                    Rotation = 180,
                     Size = UDim2.fromOffset(22, 22),
                     Parent = GroupboxTop,
-                })
-                if ArrowIcon then
-                    Library:ApplyLucideIcon(GroupboxCollapseArrow, ArrowIcon, 180)
-                end
+                }, true)
 
                 GroupboxLine = Library:MakeLine(GroupboxHolder, {
                     LayoutOrder = 1,
@@ -12425,12 +17297,14 @@ function Library:CreateWindow(WindowInfo)
                 })
 
                 GroupboxContainer = New("ScrollingFrame", {
-                    AutomaticCanvasSize = Enum.AutomaticSize.Y,
+                    AutomaticCanvasSize = Enum.AutomaticSize.None,
                     BackgroundTransparency = 1,
                     BorderSizePixel = 0,
-                    CanvasSize = UDim2.fromScale(0, 0),
+                    CanvasSize = UDim2.fromOffset(0, 0),
                     LayoutOrder = 2,
+                    ScrollBarImageTransparency = 1,
                     ScrollBarThickness = 0,
+                    ScrollingEnabled = false,
                     Size = UDim2.fromScale(1, 0),
                     Parent = GroupboxHolder,
                 })
@@ -12459,6 +17333,7 @@ function Library:CreateWindow(WindowInfo)
 
                 Visible = true,
                 Collapsed = false,
+                MaxHeight = Info.MaxHeight,
 
                 BoxHolder = BoxHolder,
                 Holder = GroupboxHolder,
@@ -12472,6 +17347,13 @@ function Library:CreateWindow(WindowInfo)
             local ResizeTween
             local CollapseArrowTween
 
+            local function RefreshBoxHolderLayout()
+                BoxHolder.AutomaticSize = Enum.AutomaticSize.None
+                BoxHolder.Size = UDim2.new(1, 0, 0, BoxHolderList.AbsoluteContentSize.Y / Library.DPIScale + 8)
+                BoxHolder.AutomaticSize = Enum.AutomaticSize.Y
+            end
+            Groupbox.RefreshBoxHolderLayout = RefreshBoxHolderLayout
+
             function Groupbox:Resize()
                 if ResizeTween then
                     StopTween(ResizeTween, true)
@@ -12479,10 +17361,17 @@ function Library:CreateWindow(WindowInfo)
                 end
 
                 local TopSize = (GroupboxTop.AbsoluteSize.Y / Library.DPIScale)
-                local ContainerSize = (GroupboxList.AbsoluteContentSize.Y / Library.DPIScale) + 14
+                local ContentSize = (GroupboxList.AbsoluteContentSize.Y / Library.DPIScale) + 14
+                local ContainerSize = ContentSize
                 if Groupbox.PoppedOut then
                     ContainerSize = math.min(ContainerSize, GetPopOutBodyMaxHeight(Groupbox, TopSize + 1))
+                elseif typeof(Groupbox.MaxHeight) == "number" then
+                    ContainerSize = math.min(ContainerSize, math.max(Groupbox.MaxHeight - TopSize - 1, 0))
                 end
+
+                local NeedsScroll = ContentSize > ContainerSize + 1
+                GroupboxContainer.CanvasSize = UDim2.fromOffset(0, if NeedsScroll then ContentSize else 0)
+                GroupboxContainer.ScrollingEnabled = NeedsScroll
 
                 local TargetSize = UDim2.new(1, 0, 0, if Groupbox.Collapsed then TopSize else (TopSize + 1 + ContainerSize))
                 GroupboxContainer.Size = UDim2.new(1, 0, 0, ContainerSize)
@@ -12502,11 +17391,14 @@ function Library:CreateWindow(WindowInfo)
                             StopTween(ResizeTween, true)
                             ResizeTween = nil
                         end
+
+                        RefreshBoxHolderLayout()
                     end))
 
                     Tween:Play()
                 else
                     GroupboxHolder.Size = TargetSize
+                    RefreshBoxHolderLayout()
                 end
             end
 
@@ -12519,6 +17411,7 @@ function Library:CreateWindow(WindowInfo)
             end))
 
             function Groupbox:SetDescription(Description: string | nil)
+                Groupbox.Description = Description
                 GroupboxDescription.Text = Description or ""
                 GroupboxDescription.Visible = (Description ~= nil)
 
@@ -12564,6 +17457,16 @@ function Library:CreateWindow(WindowInfo)
             function Groupbox:ToggleCollapsed()
                 if Info.DisableCollapsing == true then return end
                 Groupbox:SetCollapsed(not Groupbox.Collapsed)
+            end
+
+            function Groupbox:SetMaxHeight(MaxHeight: number?)
+                if MaxHeight ~= nil then
+                    assert(typeof(MaxHeight) == "number", "MaxHeight must be a number or nil")
+                    assert(MaxHeight > 0, "MaxHeight must be higher than 0")
+                end
+
+                Groupbox.MaxHeight = MaxHeight
+                Groupbox:Resize()
             end
 
             Library:MakeBoxPopOut(Groupbox, {
@@ -12688,8 +17591,16 @@ function Library:CreateWindow(WindowInfo)
             return Tab:AddGroupbox({ Side = 2, Name = Name, IconName = IconName, Visible = Visible, Collapsed = Collapsed, DisableCollapsing = DisableCollapsing })
         end
 
+        local function IsActive()
+            if ParentTab then
+                return ParentTab.ActiveSubTab == Tab
+            end
+
+            return Library.ActiveTab == Tab
+        end
+
         function Tab:Hover(Hovering)
-            if Library.ActiveTab == Tab then
+            if IsActive() then
                 return
             end
 
@@ -12697,13 +17608,85 @@ function Library:CreateWindow(WindowInfo)
                 TextTransparency = Hovering and 0.25 or 0.5,
             }):Play()
             if TabIcon then
-                TweenService:Create(TabIcon, Library.TweenInfo, {
-                    ImageTransparency = Hovering and 0.25 or 0.5,
-                }):Play()
+                TweenIcon(TabIcon, { ImageTransparency = Hovering and 0.25 or 0.5 })
             end
         end
 
-        function Tab:Show()
+        function Tab:UpdateTabInfo()
+            local SubTab = Tab.ActiveSubTab
+            if SubTab then
+                local Title = string.format('<font transparency="0.5">%s /</font> <b>%s</b>', Name, SubTab.Name)
+                Window:ShowTabInfo(Title, SubTab.Description or Description)
+            elseif Description then
+                Window:ShowTabInfo(Name, Description)
+            else
+                Window:HideTabInfo()
+            end
+        end
+
+        local function SetButtonActive(Active: boolean)
+            if TabStroke then
+                TweenService:Create(TabStroke, Library.TweenInfo, {
+                    Color = Active and Library.Scheme.AccentColor or Library.Scheme.OutlineColor,
+                }):Play()
+            else
+                TweenService:Create(TabButton, Library.TweenInfo, {
+                    BackgroundTransparency = Active and 0 or 1,
+                }):Play()
+            end
+            if TabIndicator then
+                TweenService:Create(TabIndicator, Library.TweenInfo, {
+                    BackgroundTransparency = Active and 0 or 1,
+                }):Play()
+            end
+            TweenService:Create(TabLabel, Library.TweenInfo, {
+                TextTransparency = Active and 0 or 0.5,
+            }):Play()
+            if TabIcon then
+                TweenIcon(TabIcon, { ImageTransparency = Active and 0 or 0.5 })
+            end
+        end
+
+        function Tab:Show(KeepParent: boolean?)
+            if ParentTab then
+                if ParentTab.ActiveSubTab == Tab then
+                    if not KeepParent and Library.ActiveTab ~= ParentTab then
+                        ParentTab:Show()
+                    end
+
+                    return
+                end
+
+                local ParentActive = Library.ActiveTab == ParentTab
+                if ParentTab.ActiveSubTab then
+                    ParentTab.ActiveSubTab:Hide()
+                end
+
+                ParentTab.ActiveSubTab = Tab
+                ParentTab.Sides = Tab.Sides
+                SetButtonActive(true)
+
+                if ParentActive then
+                    Library:PlayTabAnimation(Tab, true, nil, ParentTab.PreviousSubTab)
+                    Tab:RefreshSides()
+                    ParentTab:UpdateTabInfo()
+
+                    if Library.Searching then
+                        Library:UpdateSearch(Library.SearchText)
+                    end
+                else
+                    TabContainer.Position = UDim2.fromScale(0, 0)
+                    TabContainer.Visible = true
+                    Tab:RefreshSides()
+
+                    if not KeepParent then
+                        ParentTab:Show()
+                    end
+                end
+
+                return
+            end
+
             if Library.ActiveTab == Tab then
                 return
             end
@@ -12712,26 +17695,8 @@ function Library:CreateWindow(WindowInfo)
                 Library.ActiveTab:Hide()
             end
 
-            TweenService:Create(TabButton, Library.TweenInfo, {
-                BackgroundTransparency = 0,
-            }):Play()
-            if TabIndicator then
-                TweenService:Create(TabIndicator, Library.TweenInfo, {
-                    BackgroundTransparency = 0,
-                }):Play()
-            end
-            TweenService:Create(TabLabel, Library.TweenInfo, {
-                TextTransparency = 0,
-            }):Play()
-            if TabIcon then
-                TweenService:Create(TabIcon, Library.TweenInfo, {
-                    ImageTransparency = 0,
-                }):Play()
-            end
-
-            if Description then
-                Window:ShowTabInfo(Name, Description)
-            end
+            SetButtonActive(true)
+            Tab:UpdateTabInfo()
 
             Library:PlayTabAnimation(Tab, true)
             Tab:RefreshSides()
@@ -12744,24 +17709,18 @@ function Library:CreateWindow(WindowInfo)
         end
 
         function Tab:Hide()
-            TweenService:Create(TabButton, Library.TweenInfo, {
-                BackgroundTransparency = 1,
-            }):Play()
+            SetButtonActive(false)
 
-            if TabIndicator then
-                TweenService:Create(TabIndicator, Library.TweenInfo, {
-                    BackgroundTransparency = 1,
-                }):Play()
-            end
+            if ParentTab then
+                Library:PlayTabAnimation(Tab, false)
 
-            TweenService:Create(TabLabel, Library.TweenInfo, {
-                TextTransparency = 0.5,
-            }):Play()
+                ParentTab.PreviousSubTab = Tab
+                if ParentTab.ActiveSubTab == Tab then
+                    ParentTab.ActiveSubTab = nil
+                    ParentTab.Sides = {}
+                end
 
-            if TabIcon then
-                TweenService:Create(TabIcon, Library.TweenInfo, {
-                    ImageTransparency = 0.5,
-                }):Play()
+                return
             end
 
             Library:PlayTabAnimation(Tab, false)
@@ -12774,9 +17733,36 @@ function Library:CreateWindow(WindowInfo)
         function Tab:SetVisible(Visible: boolean)
             TabButton.Visible = Visible
 
-            if not Visible and Library.ActiveTab == Tab then
-                Tab:Hide()
+            if Visible or not IsActive() then
+                return
             end
+
+            Tab:Hide()
+
+            if ParentTab then
+                for _, SubTab in ParentTab.SubTabs do
+                    if SubTab ~= Tab and SubTab.Button.Visible then
+                        SubTab:Show()
+                        break
+                    end
+                end
+            end
+        end
+
+        function Tab:AddSubTab(...)
+            if not HasSubTabs then
+                error(string.format("Tab '%s' was not created with SubTabs = true", Name))
+            end
+
+            local SubTab = CreateTab(Tab, ...)
+            Tab.SubTabCount += 1
+            table.insert(Tab.SubTabs, SubTab)
+
+            if not Tab.ActiveSubTab then
+                SubTab:Show(true)
+            end
+
+            return SubTab
         end
 
         function Tab:SetOrder(NewOrder: number)
@@ -12831,6 +17817,35 @@ function Library:CreateWindow(WindowInfo)
                 end
             end
 
+            for Index = #Tab.SubTabs, 1, -1 do
+                local SubTab = Tab.SubTabs[Index]
+                if SubTab and not SubTab.Destroyed then
+                    SubTab:Destroy()
+                end
+            end
+            table.clear(Tab.SubTabs)
+
+            if ParentTab then
+                local SubIndex = table.find(ParentTab.SubTabs, Tab)
+                if SubIndex then
+                    table.remove(ParentTab.SubTabs, SubIndex)
+                end
+
+                if ParentTab.ActiveSubTab == Tab then
+                    ParentTab.ActiveSubTab = nil
+                    ParentTab.Sides = {}
+
+                    local NextSubTab = ParentTab.SubTabs[1]
+                    if NextSubTab then
+                        NextSubTab:Show(true)
+                    end
+
+                    if Library.ActiveTab == ParentTab then
+                        ParentTab:UpdateTabInfo()
+                    end
+                end
+            end
+
             if TabContainer then
                 TabContainer:Destroy()
             end
@@ -12846,7 +17861,7 @@ function Library:CreateWindow(WindowInfo)
                 TabButton:Destroy()
             end
 
-            Library.Tabs[Name] = nil
+            Library.Tabs[TabKey] = nil
         end
 
         --// Execution \\--
@@ -12854,7 +17869,7 @@ function Library:CreateWindow(WindowInfo)
             Tab.TooltipTable = Library:AddTooltip(Tooltip, nil, TabButton)
         end
 
-        if not Library.ActiveTab then
+        if not ParentTab and not Library.ActiveTab then
             Tab:Show()
         end
 
@@ -12864,11 +17879,17 @@ function Library:CreateWindow(WindowInfo)
         TabButton.MouseLeave:Connect(function()
             Tab:Hover(false)
         end)
-        TabButton.MouseButton1Click:Connect(Tab.Show)
+        TabButton.MouseButton1Click:Connect(function()
+            Tab:Show()
+        end)
 
-        Library.Tabs[Name] = Tab
+        Library.Tabs[TabKey] = Tab
 
         return Tab
+    end
+
+    function Window:AddTab(...)
+        return CreateTab(nil, ...)
     end
 
     function Window:AddKeyTab(...)
@@ -12962,15 +17983,13 @@ function Library:CreateWindow(WindowInfo)
             })
 
             if Icon then
-                TabIcon = New("ImageLabel", {
+                TabIcon = Library:CreateIcon(Icon, {
                     ImageColor3 = Icon.Custom and "WhiteColor" or "AccentColor",
                     ImageTransparency = 0.5,
-                    ScaleType = Enum.ScaleType.Fit,
                     Size = UDim2.fromScale(1, 1),
                     SizeConstraint = IsCompact and Enum.SizeConstraint.RelativeXY or Enum.SizeConstraint.RelativeYY,
                     Parent = ButtonHolder,
                 })
-                Library:ApplyLucideIcon(TabIcon, Icon)
             end
 
             table.insert(Library.TabButtons, {
@@ -13150,9 +18169,7 @@ function Library:CreateWindow(WindowInfo)
                 TextTransparency = Hovering and 0.25 or 0.5,
             }):Play()
             if TabIcon then
-                TweenService:Create(TabIcon, Library.TweenInfo, {
-                    ImageTransparency = Hovering and 0.25 or 0.5,
-                }):Play()
+                TweenIcon(TabIcon, { ImageTransparency = Hovering and 0.25 or 0.5 })
             end
         end
 
@@ -13180,9 +18197,7 @@ function Library:CreateWindow(WindowInfo)
             }):Play()
 
             if TabIcon then
-                TweenService:Create(TabIcon, Library.TweenInfo, {
-                    ImageTransparency = 0,
-                }):Play()
+                TweenIcon(TabIcon, { ImageTransparency = 0 })
             end
 
             Library:PlayTabAnimation(Tab, true)
@@ -13216,9 +18231,7 @@ function Library:CreateWindow(WindowInfo)
             }):Play()
 
             if TabIcon then
-                TweenService:Create(TabIcon, Library.TweenInfo, {
-                    ImageTransparency = 0.5,
-                }):Play()
+                TweenIcon(TabIcon, { ImageTransparency = 0.5 })
             end
 
             Library:PlayTabAnimation(Tab, false)
@@ -13272,6 +18285,309 @@ function Library:CreateWindow(WindowInfo)
         Library.Tabs[Name] = Tab
 
         return Tab
+    end
+
+    function Window:AddCustomTab(...)
+        local Name = nil
+        local Icon = nil
+        local Description = nil
+        local Tooltip = nil
+        local Order = nil
+
+        if select("#", ...) == 1 and typeof(...) == "table" then
+            local Info = select(1, ...)
+            Name = Info.Name or "Tab"
+            Icon = Info.Icon
+            Description = Info.Description
+            Tooltip = Info.Tooltip
+            Order = Info.Order
+        else
+            Name = select(1, ...) or "Tab"
+            Icon = select(2, ...)
+            Description = select(3, ...)
+            Order = select(4, ...)
+        end
+
+        if not tonumber(Order) then
+            Order = #Tabs:GetChildren()
+        end
+
+        local TabButton: TextButton
+        local TabIndicator
+        local TabLabel
+        local TabIcon
+
+        local TabContainer
+
+        Icon = Library:GetCustomIcon(Icon)
+        do
+            TabButton = New("TextButton", {
+                BackgroundColor3 = "MainColor",
+                BackgroundTransparency = 1,
+                Size = UDim2.new(1, 0, 0, 40),
+                Text = "",
+                LayoutOrder = Order,
+                Parent = Tabs,
+            })
+            New("UICorner", {
+                CornerRadius = UDim.new(0, TabButtonsStyle.CornerRadius),
+                Parent = TabButton,
+            })
+
+            if TabButtonsStyle.Indicator then
+                TabIndicator = New("Frame", {
+                    AnchorPoint = Vector2.new(1, 0.5),
+                    BackgroundColor3 = "AccentColor",
+                    BackgroundTransparency = 1,
+                    Position = UDim2.new(0, -2, 0.5, 0),
+                    Size = UDim2.fromOffset(TabButtonsStyle.IndicatorWidth, TabButtonsStyle.IndicatorHeight),
+                    Parent = TabButton,
+                })
+
+                New("UICorner", {
+                    CornerRadius = UDim.new(1, 0),
+                    Parent = TabIndicator,
+                })
+            end
+
+            local ButtonHolder = New("Frame", {
+                BackgroundTransparency = 1,
+                Size = UDim2.fromScale(1, 1),
+                Parent = TabButton,
+            })
+            local ButtonPadding = New("UIPadding", {
+                PaddingBottom = UDim.new(0, IsCompact and 6 or 11),
+                PaddingLeft = UDim.new(0, IsCompact and 6 or 12),
+                PaddingRight = UDim.new(0, IsCompact and 6 or 12),
+                PaddingTop = UDim.new(0, IsCompact and 6 or 11),
+                Parent = ButtonHolder,
+            })
+
+            TabLabel = New("TextLabel", {
+                BackgroundTransparency = 1,
+                Position = UDim2.fromOffset(30, 0),
+                Size = UDim2.new(1, -30, 1, 0),
+                Text = Name,
+                TextSize = 16,
+                TextTransparency = 0.5,
+                TextXAlignment = Enum.TextXAlignment.Left,
+                Visible = not IsCompact,
+                Parent = ButtonHolder,
+            })
+
+            if Icon then
+                TabIcon = Library:CreateIcon(Icon, {
+                    ImageColor3 = Icon.Custom and "WhiteColor" or "AccentColor",
+                    ImageTransparency = 0.5,
+                    Size = UDim2.fromScale(1, 1),
+                    SizeConstraint = IsCompact and Enum.SizeConstraint.RelativeXY or Enum.SizeConstraint.RelativeYY,
+                    Parent = ButtonHolder,
+                })
+            end
+
+            table.insert(Library.TabButtons, {
+                Label = TabLabel,
+                Padding = ButtonPadding,
+                Icon = TabIcon,
+            })
+
+            --// Tab Container \\--
+            TabContainer = New("Frame", {
+                BackgroundTransparency = 1,
+                Position = UDim2.fromScale(0, 0),
+                Size = UDim2.fromScale(1, 1),
+                Visible = false,
+                Parent = Container,
+            })
+        end
+
+        --// Tab Table \\--
+        local Tab = {
+            Name = Name,
+            Description = Description,
+            IsCustomTab = true,
+
+            Tooltip = Tooltip,
+            TooltipTable = nil,
+
+            Connections = {},
+            Destroyed = false,
+
+            Window = Window,
+            Button = TabButton,
+            Container = TabContainer,
+            Sides = {},
+
+            Groupboxes = {},
+            Tabboxes = {},
+            DependencyGroupboxes = {},
+        }
+
+        function Tab:RefreshSides() end
+        function Tab:Resize() end
+        function Tab:UpdateCorners() end
+
+        function Tab:Hover(Hovering)
+            if Library.ActiveTab == Tab then
+                return
+            end
+
+            TweenService:Create(TabLabel, Library.TweenInfo, {
+                TextTransparency = Hovering and 0.25 or 0.5,
+            }):Play()
+            if TabIcon then
+                TweenIcon(TabIcon, { ImageTransparency = Hovering and 0.25 or 0.5 })
+            end
+        end
+
+        function Tab:Show()
+            if Library.ActiveTab == Tab then
+                return
+            end
+
+            if Library.ActiveTab then
+                Library.ActiveTab:Hide()
+            end
+
+            TweenService:Create(TabButton, Library.TweenInfo, {
+                BackgroundTransparency = 0,
+            }):Play()
+
+            if TabIndicator then
+                TweenService:Create(TabIndicator, Library.TweenInfo, {
+                    BackgroundTransparency = 0,
+                }):Play()
+            end
+
+            TweenService:Create(TabLabel, Library.TweenInfo, {
+                TextTransparency = 0,
+            }):Play()
+
+            if TabIcon then
+                TweenIcon(TabIcon, { ImageTransparency = 0 })
+            end
+
+            Library:PlayTabAnimation(Tab, true)
+
+            if Description then
+                Window:ShowTabInfo(Name, Description)
+            end
+
+            Library.ActiveTab = Tab
+
+            if Library.Searching then
+                Library:UpdateSearch(Library.SearchText)
+            end
+        end
+
+        function Tab:Hide()
+            TweenService:Create(TabButton, Library.TweenInfo, {
+                BackgroundTransparency = 1,
+            }):Play()
+
+            if TabIndicator then
+                TweenService:Create(TabIndicator, Library.TweenInfo, {
+                    BackgroundTransparency = 1,
+                }):Play()
+            end
+
+            TweenService:Create(TabLabel, Library.TweenInfo, {
+                TextTransparency = 0.5,
+            }):Play()
+
+            if TabIcon then
+                TweenIcon(TabIcon, { ImageTransparency = 0.5 })
+            end
+
+            Library:PlayTabAnimation(Tab, false)
+            Window:HideTabInfo()
+
+            Library.PreviousTab = Tab
+            Library.ActiveTab = nil
+        end
+
+        function Tab:SetVisible(Visible: boolean)
+            TabButton.Visible = Visible
+
+            if not Visible and Library.ActiveTab == Tab then
+                Tab:Hide()
+            end
+        end
+
+        function Tab:SetOrder(NewOrder: number)
+            Order = NewOrder
+            TabButton.LayoutOrder = Order
+        end
+
+        function Tab:SetTooltip(Text: string?)
+            Tab.Tooltip = Text
+
+            if Tab.TooltipTable then
+                Tab.TooltipTable:Destroy()
+                Tab.TooltipTable = nil
+            end
+
+            if typeof(Text) == "string" then
+                Tab.TooltipTable = Library:AddTooltip(Text, nil, TabButton)
+            end
+        end
+
+        function Tab:Destroy()
+            Tab.Destroyed = true
+
+            if Tab.Connections then
+                for _, Connection in Tab.Connections do
+                    Connection:Disconnect()
+                end
+            end
+
+            if Tab.TooltipTable then
+                Tab.TooltipTable:Destroy()
+                Tab.TooltipTable = nil
+            end
+
+            if Library.ActiveTab == Tab then
+                Tab:Hide()
+            end
+
+            if TabContainer then
+                TabContainer:Destroy()
+            end
+
+            if TabButton then
+                for Index, Entry in Library.TabButtons do
+                    if typeof(Entry) == "table" and Entry.Button == TabButton then
+                        table.remove(Library.TabButtons, Index)
+                        break
+                    end
+                end
+
+                TabButton:Destroy()
+            end
+
+            Library.Tabs[Name] = nil
+        end
+
+        --// Execution \\--
+        if typeof(Tooltip) == "string" then
+            Tab.TooltipTable = Library:AddTooltip(Tooltip, nil, TabButton)
+        end
+
+        if not Library.ActiveTab then
+            Tab:Show()
+        end
+
+        table.insert(Tab.Connections, TabButton.MouseEnter:Connect(function()
+            Tab:Hover(true)
+        end))
+        table.insert(Tab.Connections, TabButton.MouseLeave:Connect(function()
+            Tab:Hover(false)
+        end))
+        table.insert(Tab.Connections, TabButton.MouseButton1Click:Connect(Tab.Show))
+
+        Library.Tabs[Name] = Tab
+
+        return TabContainer, Tab
     end
 
     function Window:AddDialog(Idx, Info)
@@ -13382,15 +18698,13 @@ function Library:CreateWindow(WindowInfo)
         if Info.Icon then
             local ParsedIcon = Library:GetCustomIcon(Info.Icon)
             if ParsedIcon then
-                local IconImg = New("ImageLabel", {
-                    BackgroundTransparency = 1,
+                Library:CreateIcon(ParsedIcon, {
                     Size = UDim2.fromOffset(16, 16),
                     ImageColor3 = Info.TitleColor or "FontColor",
                     LayoutOrder = 1,
                     ZIndex = 2,
                     Parent = TitleRow,
                 })
-                Library:ApplyLucideIcon(IconImg, ParsedIcon)
             end
         end
 
@@ -13751,31 +19065,6 @@ function Library:CreateWindow(WindowInfo)
         return Dialog
     end
 
-    local GuiProperties = { "BackgroundTransparency" }
-    local ImageProperties = { "BackgroundTransparency", "ImageTransparency" }
-    local TextProperties = { "BackgroundTransparency", "TextTransparency" }
-    local StrokeProperties = { "Transparency" }
-
-    local function FadeInstance(Desc, Properties)
-        local Cache = TransparencyCache[Desc]
-        if not Cache then
-            Cache = {}
-            TransparencyCache[Desc] = Cache
-        end
-
-        for _, Prop in Properties do
-            if not Library.Toggled then
-                Cache[Prop] = Desc[Prop]
-            end
-
-            if Cache[Prop] ~= nil and Cache[Prop] ~= 1 then
-                TweenService:Create(Desc, Library.WindowAnimationInfo, {
-                    [Prop] = Library.Toggled and Cache[Prop] or 1,
-                }):Play()
-            end
-        end
-    end
-
     function Window:Toggle(Value: boolean?)
         if Fading then
             return
@@ -13798,42 +19087,36 @@ function Library:CreateWindow(WindowInfo)
         end
 
         if Library.Animations and Library.Animations.ToggleWindow == true then
-            local FadeTime = Library.WindowAnimationInfo.Time
+            local Toggled = Library.Toggled
             Fading = true
 
-            if Library.Toggled then
-                MainFrame.Visible = true
-            end
+            local FadeGroup = New("CanvasGroup", {
+                BackgroundTransparency = 1,
+                GroupTransparency = Toggled and 1 or 0,
+                Name = "MainFade",
+                Size = UDim2.fromScale(1, 1),
+                ZIndex = MainFrame.ZIndex,
+                Parent = ScreenGui,
+            })
 
-            if Library.Toggled then
-                FadeInstance(MainFrame, { "BackgroundTransparency" })
-                task.wait(FadeTime / 2)
-            else
-                task.delay(FadeTime / 2, FadeInstance, MainFrame, { "BackgroundTransparency" })
-            end
+            MainFrame.Visible = true
+            MainFrame.Parent = FadeGroup
 
-            for _, Instance in MainFrame:GetDescendants() do
-                if Instance == TopBar then
-                    continue
-                end
+            task.spawn(function()
+                RunService.Heartbeat:Wait()
+                RunService.Heartbeat:Wait()
 
-                if Instance:IsA("GuiObject") then
-                    local ClassName = Instance.ClassName
-                    if ClassName == "ImageLabel" or ClassName == "ImageButton" then
-                        FadeInstance(Instance, ImageProperties)
-                    elseif ClassName == "TextLabel" or ClassName == "TextBox" or ClassName == "TextButton" then
-                        FadeInstance(Instance, TextProperties)
-                    else
-                        FadeInstance(Instance, GuiProperties)
-                    end
-                elseif Instance.ClassName == "UIStroke" then
-                    FadeInstance(Instance, StrokeProperties)
-                end
-            end
+                TweenService:Create(FadeGroup, Library.WindowAnimationInfo, { GroupTransparency = Toggled and 0 or 1 }):Play()
+                task.wait(Library.WindowAnimationInfo.Time)
 
-            task.delay(FadeTime, function()
-                MainFrame.Visible = Library.Toggled
                 Fading = false
+                if Library.Unloaded then
+                    return
+                end
+
+                MainFrame.Visible = Library.Toggled
+                MainFrame.Parent = ScreenGui
+                FadeGroup:Destroy()
             end)
         else
             MainFrame.Visible = Library.Toggled
@@ -13862,14 +19145,7 @@ function Library:CreateWindow(WindowInfo)
             RestoreMouseIcon()
             TooltipLabel.Visible = false
 
-            for _, Option in Library.Options do
-                if Option.Type == "ColorPicker" then
-                    Option.ColorMenu:Close()
-                    Option.ContextMenu:Close()
-                elseif Option.Type == "Dropdown" or Option.Type == "KeyPicker" then
-                    Option.Menu:Close()
-                end
-            end
+            CloseMenus()
         end
     end
 
@@ -13974,12 +19250,12 @@ function Library:CreateWindow(WindowInfo)
     if Library.IsMobile then
         local ToggleButton = Library:AddDraggableButton("Toggle", function()
             Library:Toggle()
-        end, true, true)
+        end, true)
 
         local LockButton = Library:AddDraggableButton("Lock", function(self)
             Library.CantDragForced = not Library.CantDragForced
             self:SetText(Library.CantDragForced and "Unlock" or "Lock")
-        end, true, true)
+        end, true)
 
         if WindowInfo.MobileButtonsSide == "Right" then
             ToggleButton.Button.AnchorPoint = Vector2.new(1, 0)
@@ -14051,6 +19327,9 @@ function Library:CreateWindow(WindowInfo)
 
     Window.MainFrame = MainFrame
     Library.Window = Window
+
+    --// YX 美化：窗口与标签页就绪后统一启动（内部保证只启动一次）
+    if YXStart then pcall(YXStart) end
 
     return Window
 end
@@ -14187,16 +19466,12 @@ function Library:CreateLoading(LoadingInfo)
     })
 
     if LoadingInfo.Icon then
-        local Icon = Library:GetCustomIcon(LoadingInfo.Icon)
-        local _WindowIcon = New("ImageLabel", {
+        Library:CreateIcon(Library:GetCustomIcon(LoadingInfo.Icon), {
             Size = LoadingInfo.IconSize,
             Parent = TitleHolder,
         })
-        if Icon then
-            Library:ApplyLucideIcon(_WindowIcon, Icon)
-        end
     else
-        local _WindowIcon = New("TextLabel", {
+        New("TextLabel", {
             BackgroundTransparency = 1,
             Size = LoadingInfo.IconSize,
             Text = LoadingInfo.Title:sub(1, 1),
@@ -14206,17 +19481,20 @@ function Library:CreateLoading(LoadingInfo)
         })
     end
 
-    local TitleX = Library:GetTextBounds(
-        LoadingInfo.Title,
-        Library.Scheme.Font,
-        20,
-        (TitleHolder.AbsoluteSize.X / Library.DPIScale) - (LoadingInfo.Icon and (LoadingInfo.IconSize.X.Offset + 6) or 0) - 12
+    local LoadingIconWidth = LoadingInfo.Icon and (LoadingInfo.IconSize.X.Offset + 6) or 0
+    local LoadingMaxWidth = math.max(0, (TitleHolder.AbsoluteSize.X / Library.DPIScale) - LoadingIconWidth - 12)
+    local LoadingTitleWidth = math.min(
+        Library:GetTextBounds(LoadingInfo.Title, Library.Scheme.Font, 20),
+        LoadingMaxWidth
     )
     local _WindowTitle = New("TextLabel", {
         BackgroundTransparency = 1,
-        Size = UDim2.new(0, TitleX, 1, 0),
+        Size = UDim2.new(0, LoadingTitleWidth, 1, 0),
         Text = LoadingInfo.Title,
         TextSize = 20,
+        TextTruncate = Enum.TextTruncate.AtEnd,
+        TextXAlignment = Enum.TextXAlignment.Left,
+        TextYAlignment = Enum.TextYAlignment.Center,
         Parent = TitleHolder,
     })
 
@@ -14249,19 +19527,14 @@ function Library:CreateLoading(LoadingInfo)
         Parent = InnerContent,
     })
 
-    local LoaderIcon = Library:GetCustomIcon(LoadingInfo.LoadingIcon)
-    local LoadingIcon = New("ImageLabel", {
+    local LoadingIcon = Library:CreateIcon(Library:GetCustomIcon(LoadingInfo.LoadingIcon), {
         Name = "LoaderIcon",
         AnchorPoint = Vector2.new(0.5, 0.5),
-        BackgroundTransparency = 1,
         Position = UDim2.fromScale(0.5, 0.5),
         Size = UDim2.fromScale(1, 1),
         ImageColor3 = LoadingInfo.LoadingIconColor or ((LoadingInfo.LoadingIcon == Templates.Loading.LoadingIcon) and "AccentColor" or "WhiteColor"),
         Parent = IconHolder,
     })
-    if LoaderIcon then
-        Library:ApplyLucideIcon(LoadingIcon, LoaderIcon)
-    end
 
     local RotationTween
     if LoadingInfo.LoadingIconTweenTime > 0 then
@@ -14321,7 +19594,7 @@ function Library:CreateLoading(LoadingInfo)
     })
     New("UIStroke", {
         ApplyStrokeMode = Enum.ApplyStrokeMode.Contextual,
-        Color = "DarkColor",
+        Color = GetTextStrokeColor,
         LineJoinMode = Enum.LineJoinMode.Miter,
         Parent = ProgressLabel,
     })
@@ -14508,10 +19781,16 @@ function Library:CreateLoading(LoadingInfo)
         local IconData = Library:GetCustomIcon(Icon)
         assert(IconData, "Image must be a valid Roblox asset or a valid URL or a valid lucide icon.")
 
-        Library:ApplyLucideIcon(LoadingIcon, IconData)
+        local Replacement = Library:ApplyIcon(LoadingIcon, IconData)
+        if Replacement ~= LoadingIcon then
+            LoadingIcon = Replacement
+            Loading:SetLoadingIconTweenTime(LoadingInfo.LoadingIconTweenTime)
+        end
     end
 
     function Loading:SetLoadingIconTweenTime(TweenTime)
+        LoadingInfo.LoadingIconTweenTime = TweenTime
+
         if RotationTween then
             StopTween(RotationTween, true)
             RotationTween = nil
@@ -14530,7 +19809,7 @@ function Library:CreateLoading(LoadingInfo)
     end
 
     function Loading:SetLoadingIconColor(Color)
-        LoadingIcon.ImageColor3 = Color
+        SetIconProperties(LoadingIcon, { ImageColor3 = Color })
     end
 
     function Loading:SetCurrentStep(Step)
@@ -14818,6 +20097,10 @@ function Library:Unload()
         Library.ActiveLoading:Destroy()
     end
 
+    if Library.KeybindMenu then
+        Library.KeybindMenu:Destroy()
+    end
+
     if ScreenGui then
         ScreenGui:Destroy()
     end
@@ -14847,7 +20130,6 @@ function Library:Unload()
     table.clear(Library.KeybindToggles)
     table.clear(Library.DependencyBoxes)
 
-    table.clear(TransparencyCache)
     table.clear(ActiveTabTweens)
 
     Library.Toggle = function(...) end
@@ -14857,6 +20139,7 @@ function Library:Unload()
     Library.WindowContainer = nil
     Library.KeybindFrame = nil
     Library.KeybindContainer = nil
+    Library.KeybindMenu = nil
 
     getgenv().Library = nil
 end
